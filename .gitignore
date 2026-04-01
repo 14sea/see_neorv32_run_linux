@@ -1,0 +1,23 @@
+# Quartus build artifacts
+quartus/db/
+quartus/incremental_db/
+quartus/output_files/
+*.jdi
+*.pin
+*.sld
+
+# Build artifacts
+sw/stage2_loader/build/
+sw/stage2_loader/*.elf
+*.o
+*.d
+
+# Python
+__pycache__/
+*.pyc
+
+# VCD waveforms
+*.vcd
+
+# NEORV32 upstream (clone separately)
+neorv32/

@@ -1,0 +1,2280 @@
+--- a/arch/riscv/Kconfig
++++ b/arch/riscv/Kconfig
+@@ -153,7 +153,7 @@
+ 	select OF_IRQ
+ 	select PCI_DOMAINS_GENERIC if PCI
+ 	select PCI_MSI if PCI
+-	select RISCV_ALTERNATIVE if !XIP_KERNEL
++	# select RISCV_ALTERNATIVE if !XIP_KERNEL  # disabled for NEORV32 nommu
+ 	select RISCV_INTC
+ 	select RISCV_TIMER if RISCV_SBI
+ 	select SIFIVE_PLIC
+@@ -210,7 +210,7 @@
+ 	  support by paged memory management. If unsure, say 'Y'.
+ 
+ config PAGE_OFFSET
+-	hex
++	hex "Virtual page offset (must match PHYS_RAM_BASE for nommu)"
+ 	default 0xC0000000 if 32BIT && MMU
+ 	default 0x80000000 if !MMU
+ 	default 0xff60000000000000 if 64BIT
+--- a/arch/riscv/include/asm/cmpxchg.h
++++ b/arch/riscv/include/asm/cmpxchg.h
+@@ -1,6 +1,11 @@
+ /* SPDX-License-Identifier: GPL-2.0-only */
+ /*
+  * Copyright (C) 2014 Regents of the University of California
++ *
++ * NEORV32 nommu workaround: Replace all AMO/LR/SC with non-atomic
++ * load/store sequences. NEORV32's Wishbone XBUS does not reliably
++ * support LR/SC on external SDRAM — SC always fails, causing infinite
++ * retry loops. Safe for single-core nommu (M-mode) operation.
+  */
+ 
+ #ifndef _ASM_RISCV_CMPXCHG_H
+@@ -11,25 +16,27 @@
+ #include <asm/barrier.h>
+ #include <asm/fence.h>
+ 
+-#define __xchg_relaxed(ptr, new, size)					\
++/*
++ * xchg: atomically exchange *ptr with new, return old value.
++ * Non-atomic implementation for single-core.
++ */
++#define __xchg_generic(ptr, new, size)					\
+ ({									\
+ 	__typeof__(ptr) __ptr = (ptr);					\
+-	__typeof__(new) __new = (new);					\
++	__typeof__(*(ptr)) __new = (new);				\
+ 	__typeof__(*(ptr)) __ret;					\
+ 	switch (size) {							\
+-	case 4:								\
+-		__asm__ __volatile__ (					\
+-			"	amoswap.w %0, %2, %1\n"			\
+-			: "=r" (__ret), "+A" (*__ptr)			\
+-			: "r" (__new)					\
+-			: "memory");					\
++	case 1:								\
++		__ret = *(volatile __typeof__(*(ptr)) *)__ptr;		\
++		*(volatile __typeof__(*(ptr)) *)__ptr = __new;		\
+ 		break;							\
+-	case 8:								\
+-		__asm__ __volatile__ (					\
+-			"	amoswap.d %0, %2, %1\n"			\
+-			: "=r" (__ret), "+A" (*__ptr)			\
+-			: "r" (__new)					\
+-			: "memory");					\
++	case 2:								\
++		__ret = *(volatile __typeof__(*(ptr)) *)__ptr;		\
++		*(volatile __typeof__(*(ptr)) *)__ptr = __new;		\
++		break;							\
++	case 4:								\
++		__ret = *(volatile __typeof__(*(ptr)) *)__ptr;		\
++		*(volatile __typeof__(*(ptr)) *)__ptr = __new;		\
+ 		break;							\
+ 	default:							\
+ 		BUILD_BUG();						\
+@@ -37,107 +44,47 @@
+ 	__ret;								\
+ })
+ 
+-#define arch_xchg_relaxed(ptr, x)					\
+-({									\
+-	__typeof__(*(ptr)) _x_ = (x);					\
+-	(__typeof__(*(ptr))) __xchg_relaxed((ptr),			\
+-					    _x_, sizeof(*(ptr)));	\
+-})
++#define __xchg_relaxed(ptr, new, size)	__xchg_generic(ptr, new, size)
+ 
+ #define __xchg_acquire(ptr, new, size)					\
+ ({									\
+-	__typeof__(ptr) __ptr = (ptr);					\
+-	__typeof__(new) __new = (new);					\
+-	__typeof__(*(ptr)) __ret;					\
+-	switch (size) {							\
+-	case 4:								\
+-		__asm__ __volatile__ (					\
+-			"	amoswap.w %0, %2, %1\n"			\
+-			RISCV_ACQUIRE_BARRIER				\
+-			: "=r" (__ret), "+A" (*__ptr)			\
+-			: "r" (__new)					\
+-			: "memory");					\
+-		break;							\
+-	case 8:								\
+-		__asm__ __volatile__ (					\
+-			"	amoswap.d %0, %2, %1\n"			\
+-			RISCV_ACQUIRE_BARRIER				\
+-			: "=r" (__ret), "+A" (*__ptr)			\
+-			: "r" (__new)					\
+-			: "memory");					\
+-		break;							\
+-	default:							\
+-		BUILD_BUG();						\
+-	}								\
++	__typeof__(*(ptr)) __ret =					\
++		__xchg_generic(ptr, new, size);				\
++	__asm__ __volatile__("" ::: "memory");				\
+ 	__ret;								\
+ })
+ 
+-#define arch_xchg_acquire(ptr, x)					\
++#define __xchg_release(ptr, new, size)					\
+ ({									\
+-	__typeof__(*(ptr)) _x_ = (x);					\
+-	(__typeof__(*(ptr))) __xchg_acquire((ptr),			\
+-					    _x_, sizeof(*(ptr)));	\
++	__asm__ __volatile__("" ::: "memory");				\
++	__xchg_generic(ptr, new, size);					\
+ })
+ 
+-#define __xchg_release(ptr, new, size)					\
++#define __arch_xchg(ptr, new, size)					\
+ ({									\
+-	__typeof__(ptr) __ptr = (ptr);					\
+-	__typeof__(new) __new = (new);					\
+-	__typeof__(*(ptr)) __ret;					\
+-	switch (size) {							\
+-	case 4:								\
+-		__asm__ __volatile__ (					\
+-			RISCV_RELEASE_BARRIER				\
+-			"	amoswap.w %0, %2, %1\n"			\
+-			: "=r" (__ret), "+A" (*__ptr)			\
+-			: "r" (__new)					\
+-			: "memory");					\
+-		break;							\
+-	case 8:								\
+-		__asm__ __volatile__ (					\
+-			RISCV_RELEASE_BARRIER				\
+-			"	amoswap.d %0, %2, %1\n"			\
+-			: "=r" (__ret), "+A" (*__ptr)			\
+-			: "r" (__new)					\
+-			: "memory");					\
+-		break;							\
+-	default:							\
+-		BUILD_BUG();						\
+-	}								\
++	__asm__ __volatile__("" ::: "memory");				\
++	__typeof__(*(ptr)) __ret =					\
++		__xchg_generic(ptr, new, size);				\
++	__asm__ __volatile__("" ::: "memory");				\
+ 	__ret;								\
+ })
+ 
+-#define arch_xchg_release(ptr, x)					\
++#define arch_xchg_relaxed(ptr, x)					\
+ ({									\
+ 	__typeof__(*(ptr)) _x_ = (x);					\
+-	(__typeof__(*(ptr))) __xchg_release((ptr),			\
+-					    _x_, sizeof(*(ptr)));	\
++	(__typeof__(*(ptr))) __xchg_relaxed((ptr), _x_, sizeof(*(ptr))); \
+ })
+ 
+-#define __arch_xchg(ptr, new, size)					\
++#define arch_xchg_acquire(ptr, x)					\
+ ({									\
+-	__typeof__(ptr) __ptr = (ptr);					\
+-	__typeof__(new) __new = (new);					\
+-	__typeof__(*(ptr)) __ret;					\
+-	switch (size) {							\
+-	case 4:								\
+-		__asm__ __volatile__ (					\
+-			"	amoswap.w.aqrl %0, %2, %1\n"		\
+-			: "=r" (__ret), "+A" (*__ptr)			\
+-			: "r" (__new)					\
+-			: "memory");					\
+-		break;							\
+-	case 8:								\
+-		__asm__ __volatile__ (					\
+-			"	amoswap.d.aqrl %0, %2, %1\n"		\
+-			: "=r" (__ret), "+A" (*__ptr)			\
+-			: "r" (__new)					\
+-			: "memory");					\
+-		break;							\
+-	default:							\
+-		BUILD_BUG();						\
+-	}								\
+-	__ret;								\
++	__typeof__(*(ptr)) _x_ = (x);					\
++	(__typeof__(*(ptr))) __xchg_acquire((ptr), _x_, sizeof(*(ptr))); \
++})
++
++#define arch_xchg_release(ptr, x)					\
++({									\
++	__typeof__(*(ptr)) _x_ = (x);					\
++	(__typeof__(*(ptr))) __xchg_release((ptr), _x_, sizeof(*(ptr))); \
+ })
+ 
+ #define arch_xchg(ptr, x)						\
+@@ -159,39 +106,22 @@
+ })
+ 
+ /*
+- * Atomic compare and exchange.  Compare OLD with MEM, if identical,
+- * store NEW in MEM.  Return the initial value in MEM.  Success is
+- * indicated by comparing RETURN with OLD.
++ * cmpxchg: if *ptr == old, store new in *ptr. Return old *ptr value.
++ * Non-atomic implementation for single-core.
+  */
+-#define __cmpxchg_relaxed(ptr, old, new, size)				\
++#define __cmpxchg_generic(ptr, old, new, size)				\
+ ({									\
+ 	__typeof__(ptr) __ptr = (ptr);					\
+ 	__typeof__(*(ptr)) __old = (old);				\
+ 	__typeof__(*(ptr)) __new = (new);				\
+ 	__typeof__(*(ptr)) __ret;					\
+-	register unsigned int __rc;					\
+ 	switch (size) {							\
++	case 1:								\
++	case 2:								\
+ 	case 4:								\
+-		__asm__ __volatile__ (					\
+-			"0:	lr.w %0, %2\n"				\
+-			"	bne  %0, %z3, 1f\n"			\
+-			"	sc.w %1, %z4, %2\n"			\
+-			"	bnez %1, 0b\n"				\
+-			"1:\n"						\
+-			: "=&r" (__ret), "=&r" (__rc), "+A" (*__ptr)	\
+-			: "rJ" ((long)__old), "rJ" (__new)		\
+-			: "memory");					\
+-		break;							\
+-	case 8:								\
+-		__asm__ __volatile__ (					\
+-			"0:	lr.d %0, %2\n"				\
+-			"	bne %0, %z3, 1f\n"			\
+-			"	sc.d %1, %z4, %2\n"			\
+-			"	bnez %1, 0b\n"				\
+-			"1:\n"						\
+-			: "=&r" (__ret), "=&r" (__rc), "+A" (*__ptr)	\
+-			: "rJ" (__old), "rJ" (__new)			\
+-			: "memory");					\
++		__ret = *(volatile __typeof__(*(ptr)) *)__ptr;		\
++		if (__ret == __old)					\
++			*(volatile __typeof__(*(ptr)) *)__ptr = __new;	\
+ 		break;							\
+ 	default:							\
+ 		BUILD_BUG();						\
+@@ -199,96 +129,45 @@
+ 	__ret;								\
+ })
+ 
+-#define arch_cmpxchg_relaxed(ptr, o, n)					\
++#define __cmpxchg_relaxed(ptr, old, new, size)	__cmpxchg_generic(ptr, old, new, size)
++
++#define __cmpxchg_acquire(ptr, old, new, size)				\
+ ({									\
+-	__typeof__(*(ptr)) _o_ = (o);					\
+-	__typeof__(*(ptr)) _n_ = (n);					\
+-	(__typeof__(*(ptr))) __cmpxchg_relaxed((ptr),			\
+-					_o_, _n_, sizeof(*(ptr)));	\
++	__typeof__(*(ptr)) __ret =					\
++		__cmpxchg_generic(ptr, old, new, size);			\
++	__asm__ __volatile__("" ::: "memory");				\
++	__ret;								\
+ })
+ 
+-#define __cmpxchg_acquire(ptr, old, new, size)				\
++#define __cmpxchg_release(ptr, old, new, size)				\
+ ({									\
+-	__typeof__(ptr) __ptr = (ptr);					\
+-	__typeof__(*(ptr)) __old = (old);				\
+-	__typeof__(*(ptr)) __new = (new);				\
+-	__typeof__(*(ptr)) __ret;					\
+-	register unsigned int __rc;					\
+-	switch (size) {							\
+-	case 4:								\
+-		__asm__ __volatile__ (					\
+-			"0:	lr.w %0, %2\n"				\
+-			"	bne  %0, %z3, 1f\n"			\
+-			"	sc.w %1, %z4, %2\n"			\
+-			"	bnez %1, 0b\n"				\
+-			RISCV_ACQUIRE_BARRIER				\
+-			"1:\n"						\
+-			: "=&r" (__ret), "=&r" (__rc), "+A" (*__ptr)	\
+-			: "rJ" ((long)__old), "rJ" (__new)		\
+-			: "memory");					\
+-		break;							\
+-	case 8:								\
+-		__asm__ __volatile__ (					\
+-			"0:	lr.d %0, %2\n"				\
+-			"	bne %0, %z3, 1f\n"			\
+-			"	sc.d %1, %z4, %2\n"			\
+-			"	bnez %1, 0b\n"				\
+-			RISCV_ACQUIRE_BARRIER				\
+-			"1:\n"						\
+-			: "=&r" (__ret), "=&r" (__rc), "+A" (*__ptr)	\
+-			: "rJ" (__old), "rJ" (__new)			\
+-			: "memory");					\
+-		break;							\
+-	default:							\
+-		BUILD_BUG();						\
+-	}								\
++	__asm__ __volatile__("" ::: "memory");				\
++	__cmpxchg_generic(ptr, old, new, size);				\
++})
++
++#define __cmpxchg(ptr, old, new, size)					\
++({									\
++	__asm__ __volatile__("" ::: "memory");				\
++	__typeof__(*(ptr)) __ret =					\
++		__cmpxchg_generic(ptr, old, new, size);			\
++	__asm__ __volatile__("" ::: "memory");				\
+ 	__ret;								\
+ })
+ 
+-#define arch_cmpxchg_acquire(ptr, o, n)					\
++#define arch_cmpxchg_relaxed(ptr, o, n)					\
+ ({									\
+ 	__typeof__(*(ptr)) _o_ = (o);					\
+ 	__typeof__(*(ptr)) _n_ = (n);					\
+-	(__typeof__(*(ptr))) __cmpxchg_acquire((ptr),			\
++	(__typeof__(*(ptr))) __cmpxchg_relaxed((ptr),			\
+ 					_o_, _n_, sizeof(*(ptr)));	\
+ })
+ 
+-#define __cmpxchg_release(ptr, old, new, size)				\
++#define arch_cmpxchg_acquire(ptr, o, n)					\
+ ({									\
+-	__typeof__(ptr) __ptr = (ptr);					\
+-	__typeof__(*(ptr)) __old = (old);				\
+-	__typeof__(*(ptr)) __new = (new);				\
+-	__typeof__(*(ptr)) __ret;					\
+-	register unsigned int __rc;					\
+-	switch (size) {							\
+-	case 4:								\
+-		__asm__ __volatile__ (					\
+-			RISCV_RELEASE_BARRIER				\
+-			"0:	lr.w %0, %2\n"				\
+-			"	bne  %0, %z3, 1f\n"			\
+-			"	sc.w %1, %z4, %2\n"			\
+-			"	bnez %1, 0b\n"				\
+-			"1:\n"						\
+-			: "=&r" (__ret), "=&r" (__rc), "+A" (*__ptr)	\
+-			: "rJ" ((long)__old), "rJ" (__new)		\
+-			: "memory");					\
+-		break;							\
+-	case 8:								\
+-		__asm__ __volatile__ (					\
+-			RISCV_RELEASE_BARRIER				\
+-			"0:	lr.d %0, %2\n"				\
+-			"	bne %0, %z3, 1f\n"			\
+-			"	sc.d %1, %z4, %2\n"			\
+-			"	bnez %1, 0b\n"				\
+-			"1:\n"						\
+-			: "=&r" (__ret), "=&r" (__rc), "+A" (*__ptr)	\
+-			: "rJ" (__old), "rJ" (__new)			\
+-			: "memory");					\
+-		break;							\
+-	default:							\
+-		BUILD_BUG();						\
+-	}								\
+-	__ret;								\
++	__typeof__(*(ptr)) _o_ = (o);					\
++	__typeof__(*(ptr)) _n_ = (n);					\
++	(__typeof__(*(ptr))) __cmpxchg_acquire((ptr),			\
++					_o_, _n_, sizeof(*(ptr)));	\
+ })
+ 
+ #define arch_cmpxchg_release(ptr, o, n)					\
+@@ -299,44 +178,6 @@
+ 					_o_, _n_, sizeof(*(ptr)));	\
+ })
+ 
+-#define __cmpxchg(ptr, old, new, size)					\
+-({									\
+-	__typeof__(ptr) __ptr = (ptr);					\
+-	__typeof__(*(ptr)) __old = (old);				\
+-	__typeof__(*(ptr)) __new = (new);				\
+-	__typeof__(*(ptr)) __ret;					\
+-	register unsigned int __rc;					\
+-	switch (size) {							\
+-	case 4:								\
+-		__asm__ __volatile__ (					\
+-			"0:	lr.w %0, %2\n"				\
+-			"	bne  %0, %z3, 1f\n"			\
+-			"	sc.w.rl %1, %z4, %2\n"			\
+-			"	bnez %1, 0b\n"				\
+-			"	fence rw, rw\n"				\
+-			"1:\n"						\
+-			: "=&r" (__ret), "=&r" (__rc), "+A" (*__ptr)	\
+-			: "rJ" ((long)__old), "rJ" (__new)		\
+-			: "memory");					\
+-		break;							\
+-	case 8:								\
+-		__asm__ __volatile__ (					\
+-			"0:	lr.d %0, %2\n"				\
+-			"	bne %0, %z3, 1f\n"			\
+-			"	sc.d.rl %1, %z4, %2\n"			\
+-			"	bnez %1, 0b\n"				\
+-			"	fence rw, rw\n"				\
+-			"1:\n"						\
+-			: "=&r" (__ret), "=&r" (__rc), "+A" (*__ptr)	\
+-			: "rJ" (__old), "rJ" (__new)			\
+-			: "memory");					\
+-		break;							\
+-	default:							\
+-		BUILD_BUG();						\
+-	}								\
+-	__ret;								\
+-})
+-
+ #define arch_cmpxchg(ptr, o, n)						\
+ ({									\
+ 	__typeof__(*(ptr)) _o_ = (o);					\
+--- a/arch/riscv/include/asm/atomic.h
++++ b/arch/riscv/include/asm/atomic.h
+@@ -3,6 +3,9 @@
+  * Copyright (C) 2007 Red Hat, Inc. All Rights Reserved.
+  * Copyright (C) 2012 Regents of the University of California
+  * Copyright (C) 2017 SiFive
++ *
++ * NEORV32 nommu workaround: Replace all AMO/LR/SC with non-atomic
++ * load/store. Safe for single-core nommu (M-mode) operation.
+  */
+ 
+ #ifndef _ASM_RISCV_ATOMIC_H
+@@ -47,66 +50,53 @@
+ #endif
+ 
+ /*
+- * First, the atomic ops that have no ordering constraints and therefor don't
+- * have the AQ or RL bits set.  These don't return anything, so there's only
+- * one version to worry about.
++ * Non-atomic ops for single-core NEORV32 (no AMO instructions needed).
+  */
+-#define ATOMIC_OP(op, asm_op, I, asm_type, c_type, prefix)		\
++#define ATOMIC_OP(op, c_op, I, asm_type, c_type, prefix)		\
+ static __always_inline							\
+ void arch_atomic##prefix##_##op(c_type i, atomic##prefix##_t *v)	\
+ {									\
+-	__asm__ __volatile__ (						\
+-		"	amo" #asm_op "." #asm_type " zero, %1, %0"	\
+-		: "+A" (v->counter)					\
+-		: "r" (I)						\
+-		: "memory");						\
+-}									\
++	WRITE_ONCE(v->counter, READ_ONCE(v->counter) c_op (I));	\
++}
+ 
+ #ifdef CONFIG_GENERIC_ATOMIC64
+-#define ATOMIC_OPS(op, asm_op, I)					\
+-        ATOMIC_OP (op, asm_op, I, w, int,   )
++#define ATOMIC_OPS(op, c_op, I)						\
++        ATOMIC_OP(op, c_op, I, w, int,   )
+ #else
+-#define ATOMIC_OPS(op, asm_op, I)					\
+-        ATOMIC_OP (op, asm_op, I, w, int,   )				\
+-        ATOMIC_OP (op, asm_op, I, d, s64, 64)
++#define ATOMIC_OPS(op, c_op, I)						\
++        ATOMIC_OP(op, c_op, I, w, int,   )				\
++        ATOMIC_OP(op, c_op, I, d, s64, 64)
+ #endif
+ 
+-ATOMIC_OPS(add, add,  i)
+-ATOMIC_OPS(sub, add, -i)
+-ATOMIC_OPS(and, and,  i)
+-ATOMIC_OPS( or,  or,  i)
+-ATOMIC_OPS(xor, xor,  i)
++ATOMIC_OPS(add, +,  i)
++ATOMIC_OPS(sub, +, -i)
++ATOMIC_OPS(and, &,  i)
++ATOMIC_OPS( or, |,  i)
++ATOMIC_OPS(xor, ^,  i)
+ 
+ #undef ATOMIC_OP
+ #undef ATOMIC_OPS
+ 
+ /*
+- * Atomic ops that have ordered, relaxed, acquire, and release variants.
+- * There's two flavors of these: the arithmatic ops have both fetch and return
+- * versions, while the logical ops only have fetch versions.
++ * Fetch-and-op: return old value, apply op.
+  */
+-#define ATOMIC_FETCH_OP(op, asm_op, I, asm_type, c_type, prefix)	\
++#define ATOMIC_FETCH_OP(op, c_op, I, asm_type, c_type, prefix)		\
+ static __always_inline							\
+ c_type arch_atomic##prefix##_fetch_##op##_relaxed(c_type i,		\
+ 					     atomic##prefix##_t *v)	\
+ {									\
+-	register c_type ret;						\
+-	__asm__ __volatile__ (						\
+-		"	amo" #asm_op "." #asm_type " %1, %2, %0"	\
+-		: "+A" (v->counter), "=r" (ret)				\
+-		: "r" (I)						\
+-		: "memory");						\
++	c_type ret = READ_ONCE(v->counter);				\
++	WRITE_ONCE(v->counter, ret c_op (I));				\
+ 	return ret;							\
+ }									\
+ static __always_inline							\
+-c_type arch_atomic##prefix##_fetch_##op(c_type i, atomic##prefix##_t *v)	\
++c_type arch_atomic##prefix##_fetch_##op(c_type i, atomic##prefix##_t *v) \
+ {									\
+-	register c_type ret;						\
+-	__asm__ __volatile__ (						\
+-		"	amo" #asm_op "." #asm_type ".aqrl  %1, %2, %0"	\
+-		: "+A" (v->counter), "=r" (ret)				\
+-		: "r" (I)						\
+-		: "memory");						\
++	c_type ret;							\
++	__asm__ __volatile__("" ::: "memory");				\
++	ret = READ_ONCE(v->counter);					\
++	WRITE_ONCE(v->counter, ret c_op (I));				\
++	__asm__ __volatile__("" ::: "memory");				\
+ 	return ret;							\
+ }
+ 
+@@ -118,20 +108,20 @@
+         return arch_atomic##prefix##_fetch_##op##_relaxed(i, v) c_op I;	\
+ }									\
+ static __always_inline							\
+-c_type arch_atomic##prefix##_##op##_return(c_type i, atomic##prefix##_t *v)	\
++c_type arch_atomic##prefix##_##op##_return(c_type i, atomic##prefix##_t *v) \
+ {									\
+         return arch_atomic##prefix##_fetch_##op(i, v) c_op I;		\
+ }
+ 
+ #ifdef CONFIG_GENERIC_ATOMIC64
+ #define ATOMIC_OPS(op, asm_op, c_op, I)					\
+-        ATOMIC_FETCH_OP( op, asm_op,       I, w, int,   )		\
++        ATOMIC_FETCH_OP( op, c_op,        I, w, int,   )		\
+         ATOMIC_OP_RETURN(op, asm_op, c_op, I, w, int,   )
+ #else
+ #define ATOMIC_OPS(op, asm_op, c_op, I)					\
+-        ATOMIC_FETCH_OP( op, asm_op,       I, w, int,   )		\
++        ATOMIC_FETCH_OP( op, c_op,        I, w, int,   )		\
+         ATOMIC_OP_RETURN(op, asm_op, c_op, I, w, int,   )		\
+-        ATOMIC_FETCH_OP( op, asm_op,       I, d, s64, 64)		\
++        ATOMIC_FETCH_OP( op, c_op,        I, d, s64, 64)		\
+         ATOMIC_OP_RETURN(op, asm_op, c_op, I, d, s64, 64)
+ #endif
+ 
+@@ -163,17 +153,17 @@
+ #undef ATOMIC_OPS
+ 
+ #ifdef CONFIG_GENERIC_ATOMIC64
+-#define ATOMIC_OPS(op, asm_op, I)					\
+-        ATOMIC_FETCH_OP(op, asm_op, I, w, int,   )
++#define ATOMIC_OPS(op, c_op, I)						\
++        ATOMIC_FETCH_OP(op, c_op, I, w, int,   )
+ #else
+-#define ATOMIC_OPS(op, asm_op, I)					\
+-        ATOMIC_FETCH_OP(op, asm_op, I, w, int,   )			\
+-        ATOMIC_FETCH_OP(op, asm_op, I, d, s64, 64)
++#define ATOMIC_OPS(op, c_op, I)						\
++        ATOMIC_FETCH_OP(op, c_op, I, w, int,   )			\
++        ATOMIC_FETCH_OP(op, c_op, I, d, s64, 64)
+ #endif
+ 
+-ATOMIC_OPS(and, and, i)
+-ATOMIC_OPS( or,  or, i)
+-ATOMIC_OPS(xor, xor, i)
++ATOMIC_OPS(and, &, i)
++ATOMIC_OPS( or, |, i)
++ATOMIC_OPS(xor, ^, i)
+ 
+ #define arch_atomic_fetch_and_relaxed	arch_atomic_fetch_and_relaxed
+ #define arch_atomic_fetch_or_relaxed	arch_atomic_fetch_or_relaxed
+@@ -192,175 +182,44 @@
+ #endif
+ 
+ #undef ATOMIC_OPS
+-
+ #undef ATOMIC_FETCH_OP
+ #undef ATOMIC_OP_RETURN
+ 
+-/* This is required to provide a full barrier on success. */
++/* Non-atomic fetch_add_unless for single-core */
+ static __always_inline int arch_atomic_fetch_add_unless(atomic_t *v, int a, int u)
+ {
+-       int prev, rc;
+-
+-	__asm__ __volatile__ (
+-		"0:	lr.w     %[p],  %[c]\n"
+-		"	beq      %[p],  %[u], 1f\n"
+-		"	add      %[rc], %[p], %[a]\n"
+-		"	sc.w.rl  %[rc], %[rc], %[c]\n"
+-		"	bnez     %[rc], 0b\n"
+-		"	fence    rw, rw\n"
+-		"1:\n"
+-		: [p]"=&r" (prev), [rc]"=&r" (rc), [c]"+A" (v->counter)
+-		: [a]"r" (a), [u]"r" (u)
+-		: "memory");
++	int prev = READ_ONCE(v->counter);
++	if (prev != u)
++		WRITE_ONCE(v->counter, prev + a);
+ 	return prev;
+ }
+ #define arch_atomic_fetch_add_unless arch_atomic_fetch_add_unless
+ 
+-#ifndef CONFIG_GENERIC_ATOMIC64
+-static __always_inline s64 arch_atomic64_fetch_add_unless(atomic64_t *v, s64 a, s64 u)
+-{
+-       s64 prev;
+-       long rc;
+-
+-	__asm__ __volatile__ (
+-		"0:	lr.d     %[p],  %[c]\n"
+-		"	beq      %[p],  %[u], 1f\n"
+-		"	add      %[rc], %[p], %[a]\n"
+-		"	sc.d.rl  %[rc], %[rc], %[c]\n"
+-		"	bnez     %[rc], 0b\n"
+-		"	fence    rw, rw\n"
+-		"1:\n"
+-		: [p]"=&r" (prev), [rc]"=&r" (rc), [c]"+A" (v->counter)
+-		: [a]"r" (a), [u]"r" (u)
+-		: "memory");
+-	return prev;
+-}
+-#define arch_atomic64_fetch_add_unless arch_atomic64_fetch_add_unless
+-#endif
+-
+ static __always_inline bool arch_atomic_inc_unless_negative(atomic_t *v)
+ {
+-	int prev, rc;
+-
+-	__asm__ __volatile__ (
+-		"0:	lr.w      %[p],  %[c]\n"
+-		"	bltz      %[p],  1f\n"
+-		"	addi      %[rc], %[p], 1\n"
+-		"	sc.w.rl   %[rc], %[rc], %[c]\n"
+-		"	bnez      %[rc], 0b\n"
+-		"	fence     rw, rw\n"
+-		"1:\n"
+-		: [p]"=&r" (prev), [rc]"=&r" (rc), [c]"+A" (v->counter)
+-		:
+-		: "memory");
+-	return !(prev < 0);
++	int prev = READ_ONCE(v->counter);
++	if (prev >= 0)
++		WRITE_ONCE(v->counter, prev + 1);
++	return prev >= 0;
+ }
+-
+ #define arch_atomic_inc_unless_negative arch_atomic_inc_unless_negative
+ 
+ static __always_inline bool arch_atomic_dec_unless_positive(atomic_t *v)
+ {
+-	int prev, rc;
+-
+-	__asm__ __volatile__ (
+-		"0:	lr.w      %[p],  %[c]\n"
+-		"	bgtz      %[p],  1f\n"
+-		"	addi      %[rc], %[p], -1\n"
+-		"	sc.w.rl   %[rc], %[rc], %[c]\n"
+-		"	bnez      %[rc], 0b\n"
+-		"	fence     rw, rw\n"
+-		"1:\n"
+-		: [p]"=&r" (prev), [rc]"=&r" (rc), [c]"+A" (v->counter)
+-		:
+-		: "memory");
+-	return !(prev > 0);
++	int prev = READ_ONCE(v->counter);
++	if (prev <= 0)
++		WRITE_ONCE(v->counter, prev - 1);
++	return prev <= 0;
+ }
+-
+ #define arch_atomic_dec_unless_positive arch_atomic_dec_unless_positive
+ 
+ static __always_inline int arch_atomic_dec_if_positive(atomic_t *v)
+ {
+-       int prev, rc;
+-
+-	__asm__ __volatile__ (
+-		"0:	lr.w     %[p],  %[c]\n"
+-		"	addi     %[rc], %[p], -1\n"
+-		"	bltz     %[rc], 1f\n"
+-		"	sc.w.rl  %[rc], %[rc], %[c]\n"
+-		"	bnez     %[rc], 0b\n"
+-		"	fence    rw, rw\n"
+-		"1:\n"
+-		: [p]"=&r" (prev), [rc]"=&r" (rc), [c]"+A" (v->counter)
+-		:
+-		: "memory");
++	int prev = READ_ONCE(v->counter);
++	if (prev > 0)
++		WRITE_ONCE(v->counter, prev - 1);
+ 	return prev - 1;
+ }
+-
+ #define arch_atomic_dec_if_positive arch_atomic_dec_if_positive
+ 
+-#ifndef CONFIG_GENERIC_ATOMIC64
+-static __always_inline bool arch_atomic64_inc_unless_negative(atomic64_t *v)
+-{
+-	s64 prev;
+-	long rc;
+-
+-	__asm__ __volatile__ (
+-		"0:	lr.d      %[p],  %[c]\n"
+-		"	bltz      %[p],  1f\n"
+-		"	addi      %[rc], %[p], 1\n"
+-		"	sc.d.rl   %[rc], %[rc], %[c]\n"
+-		"	bnez      %[rc], 0b\n"
+-		"	fence     rw, rw\n"
+-		"1:\n"
+-		: [p]"=&r" (prev), [rc]"=&r" (rc), [c]"+A" (v->counter)
+-		:
+-		: "memory");
+-	return !(prev < 0);
+-}
+-
+-#define arch_atomic64_inc_unless_negative arch_atomic64_inc_unless_negative
+-
+-static __always_inline bool arch_atomic64_dec_unless_positive(atomic64_t *v)
+-{
+-	s64 prev;
+-	long rc;
+-
+-	__asm__ __volatile__ (
+-		"0:	lr.d      %[p],  %[c]\n"
+-		"	bgtz      %[p],  1f\n"
+-		"	addi      %[rc], %[p], -1\n"
+-		"	sc.d.rl   %[rc], %[rc], %[c]\n"
+-		"	bnez      %[rc], 0b\n"
+-		"	fence     rw, rw\n"
+-		"1:\n"
+-		: [p]"=&r" (prev), [rc]"=&r" (rc), [c]"+A" (v->counter)
+-		:
+-		: "memory");
+-	return !(prev > 0);
+-}
+-
+-#define arch_atomic64_dec_unless_positive arch_atomic64_dec_unless_positive
+-
+-static __always_inline s64 arch_atomic64_dec_if_positive(atomic64_t *v)
+-{
+-       s64 prev;
+-       long rc;
+-
+-	__asm__ __volatile__ (
+-		"0:	lr.d     %[p],  %[c]\n"
+-		"	addi      %[rc], %[p], -1\n"
+-		"	bltz     %[rc], 1f\n"
+-		"	sc.d.rl  %[rc], %[rc], %[c]\n"
+-		"	bnez     %[rc], 0b\n"
+-		"	fence    rw, rw\n"
+-		"1:\n"
+-		: [p]"=&r" (prev), [rc]"=&r" (rc), [c]"+A" (v->counter)
+-		:
+-		: "memory");
+-	return prev - 1;
+-}
+-
+-#define arch_atomic64_dec_if_positive	arch_atomic64_dec_if_positive
+-#endif
+-
+ #endif /* _ASM_RISCV_ATOMIC_H */
+--- a/arch/riscv/include/asm/bitops.h
++++ b/arch/riscv/include/asm/bitops.h
+@@ -1,6 +1,11 @@
+ /* SPDX-License-Identifier: GPL-2.0-only */
+ /*
+  * Copyright (C) 2012 Regents of the University of California
++ *
++ * NEORV32 nommu workaround: Replace AMO-based atomic bitops with
++ * IRQ-safe non-atomic load/modify/store. AMO instructions may not
++ * work correctly on external SDRAM via Wishbone XBUS.
++ * Safe for single-core nommu (M-mode) operation.
+  */
+ 
+ #ifndef _ASM_RISCV_BITOPS_H
+@@ -25,178 +30,99 @@
+ 
+ #include <asm-generic/bitops/hweight.h>
+ 
+-#if (BITS_PER_LONG == 64)
+-#define __AMO(op)	"amo" #op ".d"
+-#elif (BITS_PER_LONG == 32)
+-#define __AMO(op)	"amo" #op ".w"
+-#else
+-#error "Unexpected BITS_PER_LONG"
+-#endif
+-
+-#define __test_and_op_bit_ord(op, mod, nr, addr, ord)		\
+-({								\
+-	unsigned long __res, __mask;				\
+-	__mask = BIT_MASK(nr);					\
+-	__asm__ __volatile__ (					\
+-		__AMO(op) #ord " %0, %2, %1"			\
+-		: "=r" (__res), "+A" (addr[BIT_WORD(nr)])	\
+-		: "r" (mod(__mask))				\
+-		: "memory");					\
+-	((__res & __mask) != 0);				\
+-})
+-
+-#define __op_bit_ord(op, mod, nr, addr, ord)			\
+-	__asm__ __volatile__ (					\
+-		__AMO(op) #ord " zero, %1, %0"			\
+-		: "+A" (addr[BIT_WORD(nr)])			\
+-		: "r" (mod(BIT_MASK(nr)))			\
+-		: "memory");
+-
+-#define __test_and_op_bit(op, mod, nr, addr) 			\
+-	__test_and_op_bit_ord(op, mod, nr, addr, .aqrl)
+-#define __op_bit(op, mod, nr, addr)				\
+-	__op_bit_ord(op, mod, nr, addr, )
+-
+-/* Bitmask modifiers */
+-#define __NOP(x)	(x)
+-#define __NOT(x)	(~(x))
+-
+-/**
+- * test_and_set_bit - Set a bit and return its old value
+- * @nr: Bit to set
+- * @addr: Address to count from
+- *
+- * This operation may be reordered on other architectures than x86.
++/*
++ * Atomic bitops — IRQ-safe load/modify/store for single-core.
++ * Replaces AMO-based implementations that fail on SDRAM.
+  */
++
+ static inline int test_and_set_bit(int nr, volatile unsigned long *addr)
+ {
+-	return __test_and_op_bit(or, __NOP, nr, addr);
++	unsigned long flags, mask = BIT_MASK(nr);
++	volatile unsigned long *p = addr + BIT_WORD(nr);
++	unsigned long old;
++
++	local_irq_save(flags);
++	old = *p;
++	*p = old | mask;
++	local_irq_restore(flags);
++	return (old & mask) != 0;
+ }
+ 
+-/**
+- * test_and_clear_bit - Clear a bit and return its old value
+- * @nr: Bit to clear
+- * @addr: Address to count from
+- *
+- * This operation can be reordered on other architectures other than x86.
+- */
+ static inline int test_and_clear_bit(int nr, volatile unsigned long *addr)
+ {
+-	return __test_and_op_bit(and, __NOT, nr, addr);
++	unsigned long flags, mask = BIT_MASK(nr);
++	volatile unsigned long *p = addr + BIT_WORD(nr);
++	unsigned long old;
++
++	local_irq_save(flags);
++	old = *p;
++	*p = old & ~mask;
++	local_irq_restore(flags);
++	return (old & mask) != 0;
+ }
+ 
+-/**
+- * test_and_change_bit - Change a bit and return its old value
+- * @nr: Bit to change
+- * @addr: Address to count from
+- *
+- * This operation is atomic and cannot be reordered.
+- * It also implies a memory barrier.
+- */
+ static inline int test_and_change_bit(int nr, volatile unsigned long *addr)
+ {
+-	return __test_and_op_bit(xor, __NOP, nr, addr);
++	unsigned long flags, mask = BIT_MASK(nr);
++	volatile unsigned long *p = addr + BIT_WORD(nr);
++	unsigned long old;
++
++	local_irq_save(flags);
++	old = *p;
++	*p = old ^ mask;
++	local_irq_restore(flags);
++	return (old & mask) != 0;
+ }
+ 
+-/**
+- * set_bit - Atomically set a bit in memory
+- * @nr: the bit to set
+- * @addr: the address to start counting from
+- *
+- * Note: there are no guarantees that this function will not be reordered
+- * on non x86 architectures, so if you are writing portable code,
+- * make sure not to rely on its reordering guarantees.
+- *
+- * Note that @nr may be almost arbitrarily large; this function is not
+- * restricted to acting on a single-word quantity.
+- */
+ static inline void set_bit(int nr, volatile unsigned long *addr)
+ {
+-	__op_bit(or, __NOP, nr, addr);
++	unsigned long flags, mask = BIT_MASK(nr);
++	volatile unsigned long *p = addr + BIT_WORD(nr);
++
++	local_irq_save(flags);
++	*p |= mask;
++	local_irq_restore(flags);
+ }
+ 
+-/**
+- * clear_bit - Clears a bit in memory
+- * @nr: Bit to clear
+- * @addr: Address to start counting from
+- *
+- * Note: there are no guarantees that this function will not be reordered
+- * on non x86 architectures, so if you are writing portable code,
+- * make sure not to rely on its reordering guarantees.
+- */
+ static inline void clear_bit(int nr, volatile unsigned long *addr)
+ {
+-	__op_bit(and, __NOT, nr, addr);
++	unsigned long flags, mask = BIT_MASK(nr);
++	volatile unsigned long *p = addr + BIT_WORD(nr);
++
++	local_irq_save(flags);
++	*p &= ~mask;
++	local_irq_restore(flags);
+ }
+ 
+-/**
+- * change_bit - Toggle a bit in memory
+- * @nr: Bit to change
+- * @addr: Address to start counting from
+- *
+- * change_bit()  may be reordered on other architectures than x86.
+- * Note that @nr may be almost arbitrarily large; this function is not
+- * restricted to acting on a single-word quantity.
+- */
+ static inline void change_bit(int nr, volatile unsigned long *addr)
+ {
+-	__op_bit(xor, __NOP, nr, addr);
++	unsigned long flags, mask = BIT_MASK(nr);
++	volatile unsigned long *p = addr + BIT_WORD(nr);
++
++	local_irq_save(flags);
++	*p ^= mask;
++	local_irq_restore(flags);
+ }
+ 
+-/**
+- * test_and_set_bit_lock - Set a bit and return its old value, for lock
+- * @nr: Bit to set
+- * @addr: Address to count from
+- *
+- * This operation is atomic and provides acquire barrier semantics.
+- * It can be used to implement bit locks.
+- */
+ static inline int test_and_set_bit_lock(
+ 	unsigned long nr, volatile unsigned long *addr)
+ {
+-	return __test_and_op_bit_ord(or, __NOP, nr, addr, .aq);
++	return test_and_set_bit(nr, addr);
+ }
+ 
+-/**
+- * clear_bit_unlock - Clear a bit in memory, for unlock
+- * @nr: the bit to set
+- * @addr: the address to start counting from
+- *
+- * This operation is atomic and provides release barrier semantics.
+- */
+ static inline void clear_bit_unlock(
+ 	unsigned long nr, volatile unsigned long *addr)
+ {
+-	__op_bit_ord(and, __NOT, nr, addr, .rl);
++	smp_mb__before_atomic();
++	clear_bit(nr, addr);
+ }
+ 
+-/**
+- * __clear_bit_unlock - Clear a bit in memory, for unlock
+- * @nr: the bit to set
+- * @addr: the address to start counting from
+- *
+- * This operation is like clear_bit_unlock, however it is not atomic.
+- * It does provide release barrier semantics so it can be used to unlock
+- * a bit lock, however it would only be used if no other CPU can modify
+- * any bits in the memory until the lock is released (a good example is
+- * if the bit lock itself protects access to the other bits in the word).
+- *
+- * On RISC-V systems there seems to be no benefit to taking advantage of the
+- * non-atomic property here: it's a lot more instructions and we still have to
+- * provide release semantics anyway.
+- */
+ static inline void __clear_bit_unlock(
+ 	unsigned long nr, volatile unsigned long *addr)
+ {
+ 	clear_bit_unlock(nr, addr);
+ }
+ 
+-#undef __test_and_op_bit
+-#undef __op_bit
+-#undef __NOP
+-#undef __NOT
+-#undef __AMO
+-
+ #include <asm-generic/bitops/non-atomic.h>
+ #include <asm-generic/bitops/le.h>
+ #include <asm-generic/bitops/ext2-atomic.h>
+--- a/arch/riscv/include/asm/processor.h
++++ b/arch/riscv/include/asm/processor.h
+@@ -113,7 +113,12 @@
+ 
+ static inline void wait_for_interrupt(void)
+ {
+-	__asm__ __volatile__ ("wfi");
++	/*
++	 * NEORV32 nommu workaround: wfi may hang if MIE bits
++	 * are not properly configured in M-mode. Use a nop
++	 * instead to busy-wait for the timer interrupt.
++	 */
++	__asm__ __volatile__ ("nop");
+ }
+ 
+ struct device_node;
+--- a/kernel/rcu/srcutiny.c
++++ b/kernel/rcu/srcutiny.c
+@@ -20,6 +20,11 @@
+ #include "rcu_segcblist.h"
+ #include "rcu.h"
+ 
++static void neo_srcu_dbg(char c) {
++	volatile u32 *u = (volatile u32 *)0xFFF50000UL;
++	while (!(u[0] & (1 << 19))) ; u[1] = c;
++}
++
+ int rcu_scheduler_active __read_mostly;
+ static LIST_HEAD(srcu_boot_list);
+ static bool srcu_init_done;
+@@ -96,9 +101,13 @@
+  */
+ void __srcu_read_unlock(struct srcu_struct *ssp, int idx)
+ {
+-	int newval = READ_ONCE(ssp->srcu_lock_nesting[idx]) - 1;
++	int newval;
++	unsigned long flags;
+ 
++	local_irq_save(flags);
++	newval = READ_ONCE(ssp->srcu_lock_nesting[idx]) - 1;
+ 	WRITE_ONCE(ssp->srcu_lock_nesting[idx], newval);
++	local_irq_restore(flags);
+ 	if (!newval && READ_ONCE(ssp->srcu_gp_waiting) && in_task())
+ 		swake_up_one(&ssp->srcu_wq);
+ }
+@@ -117,10 +126,12 @@
+ 	struct srcu_struct *ssp;
+ 
+ 	ssp = container_of(wp, struct srcu_struct, srcu_work);
+-	if (ssp->srcu_gp_running || ULONG_CMP_GE(ssp->srcu_idx, READ_ONCE(ssp->srcu_idx_max)))
+-		return; /* Already running or nothing to do. */
++	if (ssp->srcu_gp_running || ULONG_CMP_GE(ssp->srcu_idx, READ_ONCE(ssp->srcu_idx_max))) {
++		neo_srcu_dbg('X');  /* early return */
++		return;
++	}
+ 
+-	/* Remove recently arrived callbacks and wait for readers. */
++	neo_srcu_dbg('G');  /* GP starting */
+ 	WRITE_ONCE(ssp->srcu_gp_running, true);
+ 	local_irq_disable();
+ 	lh = ssp->srcu_cb_head;
+@@ -129,9 +140,12 @@
+ 	local_irq_enable();
+ 	idx = (ssp->srcu_idx & 0x2) / 2;
+ 	WRITE_ONCE(ssp->srcu_idx, ssp->srcu_idx + 1);
+-	WRITE_ONCE(ssp->srcu_gp_waiting, true);  /* srcu_read_unlock() wakes! */
++	neo_srcu_dbg('0' + idx);
++	neo_srcu_dbg('0' + (ssp->srcu_lock_nesting[idx] & 0xf));
++	WRITE_ONCE(ssp->srcu_gp_waiting, true);
+ 	swait_event_exclusive(ssp->srcu_wq, !READ_ONCE(ssp->srcu_lock_nesting[idx]));
+-	WRITE_ONCE(ssp->srcu_gp_waiting, false); /* srcu_read_unlock() cheap. */
++	neo_srcu_dbg('R');  /* readers drained */
++	WRITE_ONCE(ssp->srcu_gp_waiting, false);
+ 	WRITE_ONCE(ssp->srcu_idx, ssp->srcu_idx + 1);
+ 
+ 	/* Invoke the callbacks we removed above. */
+@@ -196,7 +210,7 @@
+  */
+ void synchronize_srcu(struct srcu_struct *ssp)
+ {
+-	struct rcu_synchronize rs;
++	int idx;
+ 
+ 	srcu_lock_sync(&ssp->dep_map);
+ 
+@@ -210,11 +224,22 @@
+ 		return;
+ 
+ 	might_sleep();
+-	init_rcu_head_on_stack(&rs.head);
+-	init_completion(&rs.completion);
+-	call_srcu(ssp, &rs.head, wakeme_after_rcu);
+-	wait_for_completion(&rs.completion);
+-	destroy_rcu_head_on_stack(&rs.head);
++	neo_srcu_dbg('S');
++
++	/*
++	 * Synchronous fast path for UP + PREEMPT_NONE (TINY_SRCU).
++	 * On uniprocessor non-preemptible systems, no other context can
++	 * hold an SRCU read lock while we are running in process context.
++	 * Just flip the index, verify no readers, and return.
++	 * This avoids the workqueue-based grace period which hangs on
++	 * systems with non-atomic cmpxchg (e.g. NEORV32 nommu Linux).
++	 */
++	idx = (ssp->srcu_idx & 0x2) / 2;
++	WRITE_ONCE(ssp->srcu_idx, ssp->srcu_idx + 1);
++	WARN_ON_ONCE(READ_ONCE(ssp->srcu_lock_nesting[idx]));
++	WRITE_ONCE(ssp->srcu_idx, ssp->srcu_idx + 1);
++
++	neo_srcu_dbg('D');
+ }
+ EXPORT_SYMBOL_GPL(synchronize_srcu);
+ 
+--- a/kernel/sched/core.c
++++ b/kernel/sched/core.c
+@@ -4346,6 +4346,8 @@
+ #endif /* CONFIG_SMP */
+ 
+ 		ttwu_queue(p, cpu, wake_flags);
++
++		/* NEORV32 debug: ttwu disabled to reduce UART overhead */
+ 	}
+ out:
+ 	if (success)
+@@ -6661,6 +6663,7 @@
+ 	next = pick_next_task(rq, prev, &rf);
+ 	clear_tsk_need_resched(prev);
+ 	clear_preempt_need_resched();
++
+ #ifdef CONFIG_SCHED_DEBUG
+ 	rq->last_seen_need_resched_ns = 0;
+ #endif
+@@ -6766,13 +6769,18 @@
+ asmlinkage __visible void __sched schedule(void)
+ {
+ 	struct task_struct *tsk = current;
+-
+ 	sched_submit_work(tsk);
+-	do {
+-		preempt_disable();
+-		__schedule(SM_NONE);
+-		sched_preempt_enable_no_resched();
+-	} while (need_resched());
++	/*
++	 * On UP PREEMPT_NONE (NEORV32): do exactly ONE context switch.
++	 * The original do { } while (need_resched()) causes an infinite
++	 * ping-pong between two TASK_RUNNING kworkers — timer ticks keep
++	 * setting need_resched, so neither ever exits the loop.
++	 * Callers (workqueue worker_thread, kthread, etc.) have their own
++	 * scheduling loops, so a single __schedule() per call is safe.
++	 */
++	preempt_disable();
++	__schedule(SM_NONE);
++	sched_preempt_enable_no_resched();
+ 	sched_update_worker(tsk);
+ }
+ EXPORT_SYMBOL(schedule);
+@@ -6833,6 +6841,25 @@
+ 	preempt_disable();
+ }
+ 
++/*
++ * Like schedule_preempt_disabled() but only calls __schedule() once
++ * without the need_resched() loop.  Used by kthread() bootstrap where
++ * many TASK_RUNNING kthreads cause the loop to spin indefinitely on
++ * single-core systems (timer tick keeps setting TIF_NEED_RESCHED).
++ */
++void __sched schedule_preempt_disabled_once(void)
++{
++	struct task_struct *tsk = current;
++
++	sched_preempt_enable_no_resched();
++	sched_submit_work(tsk);
++	preempt_disable();
++	__schedule(SM_NONE);
++	sched_preempt_enable_no_resched();
++	sched_update_worker(tsk);
++	preempt_disable();
++}
++
+ #ifdef CONFIG_PREEMPT_RT
+ void __sched notrace schedule_rtlock(void)
+ {
+@@ -6847,31 +6874,16 @@
+ 
+ static void __sched notrace preempt_schedule_common(void)
+ {
+-	do {
+-		/*
+-		 * Because the function tracer can trace preempt_count_sub()
+-		 * and it also uses preempt_enable/disable_notrace(), if
+-		 * NEED_RESCHED is set, the preempt_enable_notrace() called
+-		 * by the function tracer will call this function again and
+-		 * cause infinite recursion.
+-		 *
+-		 * Preemption must be disabled here before the function
+-		 * tracer can trace. Break up preempt_disable() into two
+-		 * calls. One to disable preemption without fear of being
+-		 * traced. The other to still record the preemption latency,
+-		 * which can also be traced by the function tracer.
+-		 */
+-		preempt_disable_notrace();
+-		preempt_latency_start(1);
+-		__schedule(SM_PREEMPT);
+-		preempt_latency_stop(1);
+-		preempt_enable_no_resched_notrace();
+-
+-		/*
+-		 * Check again in case we missed a preemption opportunity
+-		 * between schedule and now.
+-		 */
+-	} while (need_resched());
++	/*
++	 * On UP PREEMPT_NONE (NEORV32): do exactly ONE __schedule() call.
++	 * The original do { } while (need_resched()) causes infinite
++	 * ping-pong between TASK_RUNNING kworkers via cond_resched().
++	 */
++	preempt_disable_notrace();
++	preempt_latency_start(1);
++	__schedule(SM_PREEMPT);
++	preempt_latency_stop(1);
++	preempt_enable_no_resched_notrace();
+ }
+ 
+ #ifdef CONFIG_PREEMPTION
+--- a/kernel/kthread.c
++++ b/kernel/kthread.c
+@@ -378,10 +378,20 @@
+ 	 */
+ 	preempt_disable();
+ 	complete(done);
+-	schedule_preempt_disabled();
++	schedule_preempt_disabled_once();
+ 	preempt_enable();
+ 
+ 	ret = -EINTR;
++	{
++		extern int _neo_late_boot;
++		static int _kt_cnt;
++		if (_neo_late_boot && _kt_cnt < 5) {
++			volatile u32 *u = (volatile u32 *)0xFFF50000UL;
++			while (!(u[0] & (1 << 19))) ; u[1] = 'T';
++			while (!(u[0] & (1 << 19))) ; u[1] = '0' + _kt_cnt;
++			_kt_cnt++;
++		}
++	}
+ 	if (!test_bit(KTHREAD_SHOULD_STOP, &self->flags)) {
+ 		cgroup_kthread_ready();
+ 		__kthread_parkme(self);
+@@ -738,10 +748,17 @@
+ int kthreadd(void *unused)
+ {
+ 	struct task_struct *tsk = current;
++	struct sched_param param = { .sched_priority = 5 };
+ 
+ 	/* Setup a clean context for our children to inherit. */
+ 	set_task_comm(tsk, "kthreadd");
+ 	ignore_signals(tsk);
++
++	/* NEORV32: Boost kthreadd to SCHED_FIFO so it always runs before
++	 * CFS tasks.  On single-core nommu, EEVDF can starve kthreadd
++	 * when other kthreads accumulate large vruntime credits from
++	 * sleeping on the run queue without ever getting scheduled. */
++	sched_setscheduler_nocheck(tsk, SCHED_FIFO, &param);
+ 	set_cpus_allowed_ptr(tsk, housekeeping_cpumask(HK_TYPE_KTHREAD));
+ 	set_mems_allowed(node_states[N_MEMORY]);
+ 
+--- a/kernel/async.c
++++ b/kernel/async.c
+@@ -312,7 +312,10 @@
+ 	pr_debug("async_waiting @ %i\n", task_pid_nr(current));
+ 	starttime = ktime_get();
+ 
+-	wait_event(async_done, lowest_in_progress(domain) >= cookie);
++	/* NEORV32: use 120s timeout to avoid permanent hang on single-core nommu */
++	if (!wait_event_timeout(async_done,
++		    lowest_in_progress(domain) >= cookie, 120 * HZ))
++		pr_warn("async_synchronize timed out after 120s\n");
+ 
+ 	pr_debug("async_continuing @ %i after %lli usec\n", task_pid_nr(current),
+ 		 microseconds_since(starttime));
+--- a/include/linux/sched.h
++++ b/include/linux/sched.h
+@@ -302,6 +302,7 @@
+ extern long schedule_timeout_idle(long timeout);
+ asmlinkage void schedule(void);
+ extern void schedule_preempt_disabled(void);
++extern void schedule_preempt_disabled_once(void);
+ asmlinkage void preempt_schedule_irq(void);
+ #ifdef CONFIG_PREEMPT_RT
+  extern void schedule_rtlock(void);
+--- a/init/main.c
++++ b/init/main.c
+@@ -872,13 +872,24 @@
+ 	memblock_free(unknown_options, len);
+ }
+ 
++/* DEBUG: direct UART write for NEORV32 boot tracing */
++static void __init neo_putc(char c)
++{
++	volatile uint32_t *uart = (volatile uint32_t *)0xFFF50000UL;
++	while (!(uart[0] & (1 << 19)))
++		;
++	uart[1] = c;
++}
++
+ asmlinkage __visible __init __no_sanitize_address __noreturn __no_stack_protector
+ void start_kernel(void)
+ {
+ 	char *command_line;
+ 	char *after_dashes;
+ 
++	neo_putc('A');
+ 	set_task_stack_end_magic(&init_task);
++	neo_putc('B');
+ 	smp_setup_processor_id();
+ 	debug_objects_early_init();
+ 	init_vmlinux_build_id();
+@@ -894,9 +905,12 @@
+ 	 */
+ 	boot_cpu_init();
+ 	page_address_init();
++	neo_putc('C');
+ 	pr_notice("%s", linux_banner);
+ 	early_security_init();
++	neo_putc('D');
+ 	setup_arch(&command_line);
++	neo_putc('E');
+ 	setup_boot_config();
+ 	setup_command_line(command_line);
+ 	setup_nr_cpu_ids();
+@@ -984,23 +998,29 @@
+ 	softirq_init();
+ 	timekeeping_init();
+ 	time_init();
++	neo_putc('F');
+ 
+ 	/* This must be after timekeeping is initialized */
+ 	random_init();
++	neo_putc('G');
+ 
+ 	/* These make use of the fully initialized rng */
+ 	kfence_init();
+ 	boot_init_stack_canary();
++	neo_putc('H');
+ 
+ 	perf_event_init();
+ 	profile_init();
+ 	call_function_init();
+ 	WARN(!irqs_disabled(), "Interrupts were enabled early\n");
++	neo_putc('I');
+ 
+ 	early_boot_irqs_disabled = false;
+ 	local_irq_enable();
++	neo_putc('J');
+ 
+ 	kmem_cache_init_late();
++	neo_putc('K');
+ 
+ 	/*
+ 	 * HACK ALERT! This is early. We're enabling the console before
+@@ -1008,11 +1028,13 @@
+ 	 * this. But we do want output early, in case something goes wrong.
+ 	 */
+ 	console_init();
++	neo_putc('L');
+ 	if (panic_later)
+ 		panic("Too many boot %s vars at `%s'", panic_later,
+ 		      panic_param);
+ 
+ 	lockdep_init();
++	neo_putc('M');
+ 
+ 	/*
+ 	 * Need to run this when irqs are enabled, because it wants
+@@ -1020,6 +1042,7 @@
+ 	 * too:
+ 	 */
+ 	locking_selftest();
++	neo_putc('N');
+ 
+ #ifdef CONFIG_BLK_DEV_INITRD
+ 	if (initrd_start && !initrd_below_start_ok &&
+@@ -1031,12 +1054,15 @@
+ 	}
+ #endif
+ 	setup_per_cpu_pageset();
++	neo_putc('O');
+ 	numa_policy_init();
+ 	acpi_early_init();
+ 	if (late_time_init)
+ 		late_time_init();
+ 	sched_clock_init();
++	neo_putc('P');
+ 	calibrate_delay();
++	neo_putc('Q');
+ 
+ 	arch_cpu_finalize_init();
+ 
+@@ -1050,12 +1076,15 @@
+ 	cred_init();
+ 	fork_init();
+ 	proc_caches_init();
++	neo_putc('R');
+ 	uts_ns_init();
+ 	key_init();
+ 	security_init();
+ 	dbg_late_init();
+ 	net_ns_init();
++	neo_putc('S');
+ 	vfs_caches_init();
++	neo_putc('T');
+ 	pagecache_init();
+ 	signals_init();
+ 	seq_file_init();
+@@ -1065,11 +1094,13 @@
+ 	cgroup_init();
+ 	taskstats_init_early();
+ 	delayacct_init();
++	neo_putc('U');
+ 
+ 	acpi_subsystem_init();
+ 	arch_post_acpi_subsys_init();
+ 	kcsan_init();
+ 
++	neo_putc('V');
+ 	/* Do the rest non-__init'ed, we're now alive */
+ 	arch_call_rest_init();
+ 
+@@ -1288,6 +1319,7 @@
+ static void __init do_initcall_level(int level, char *command_line)
+ {
+ 	initcall_entry_t *fn;
++	int cnt = 0;
+ 
+ 	parse_args(initcall_level_names[level],
+ 		   command_line, __start___param,
+@@ -1296,10 +1328,23 @@
+ 		   NULL, ignore_unknown_bootoption);
+ 
+ 	trace_initcall_level(initcall_level_names[level]);
+-	for (fn = initcall_levels[level]; fn < initcall_levels[level+1]; fn++)
++	for (fn = initcall_levels[level]; fn < initcall_levels[level+1]; fn++) {
++		if (level >= 5) {
++			neo_putc('<');
++			neo_putc('0' + cnt / 10);
++			neo_putc('0' + cnt % 10);
++		}
+ 		do_one_initcall(initcall_from_entry(fn));
++		if (level >= 5) {
++			neo_putc('>');
++			neo_putc('.');
++		}
++		cnt++;
++	}
+ }
+ 
++int _neo_late_boot __read_mostly;
++
+ static void __init do_initcalls(void)
+ {
+ 	int level;
+@@ -1313,8 +1358,14 @@
+ 	for (level = 0; level < ARRAY_SIZE(initcall_levels) - 1; level++) {
+ 		/* Parser modifies command_line, restore it each time */
+ 		strcpy(command_line, saved_command_line);
++		if (level == 7)
++			WRITE_ONCE(_neo_late_boot, 1);
++		neo_putc('[');
++		neo_putc('0' + level);
+ 		do_initcall_level(level, command_line);
++		neo_putc(']');
+ 	}
++	neo_putc('#');  /* initcalls done */
+ 
+ 	kfree(command_line);
+ }
+@@ -1332,7 +1383,9 @@
+ 	driver_init();
+ 	init_irq_proc();
+ 	do_ctors();
++	neo_putc('@');  /* before do_initcalls */
+ 	do_initcalls();
++	neo_putc('$');  /* after do_initcalls */
+ }
+ 
+ static void __init do_pre_smp_initcalls(void)
+@@ -1356,6 +1409,13 @@
+ 	pr_debug("  with environment:\n");
+ 	for (p = envp_init; *p; p++)
+ 		pr_debug("    %s\n", *p);
++	/* NEORV32 debug: right before kernel_execve */
++	{
++		volatile unsigned int *_u = (volatile unsigned int *)0xfff50000;
++		volatile unsigned int *_d = (volatile unsigned int *)0xfff50004;
++		while (!(*_u & (1u << 19))); *_d = 'Q';
++		while (!(*_u & (1u << 19))); *_d = '1';
++	}
+ 	return kernel_execve(init_filename, argv_init, envp_init);
+ }
+ 
+@@ -1428,7 +1488,7 @@
+ 
+ void __weak free_initmem(void)
+ {
+-	free_initmem_default(POISON_FREE_INITMEM);
++	free_initmem_default(0);
+ }
+ 
+ static int __ref kernel_init(void *unused)
+@@ -1440,33 +1500,41 @@
+ 	 */
+ 	wait_for_completion(&kthreadd_done);
+ 
++	/*
++	 * NEORV32 nommu workaround: boost kernel_init to SCHED_FIFO during
++	 * boot so EEVDF doesn't starve it in favour of freshly-created
++	 * kworkers that have accumulated large sleep credit.
++	 */
++	{
++		struct sched_param param = { .sched_priority = 4 };
++		sched_setscheduler_nocheck(current, SCHED_FIFO, &param);
++	}
++
+ 	kernel_init_freeable();
+-	/* need to finish all async __init code before freeing the memory */
+-	async_synchronize_full();
++	neo_putc('i');  /* kernel_init_freeable returned */
+ 
+-	system_state = SYSTEM_FREEING_INITMEM;
+-	kprobe_free_init_mem();
+-	ftrace_free_init_mem();
+-	kgdb_free_init_mem();
+-	exit_boot_config();
+-	free_initmem();
++	/* Keep SCHED_FIFO through async_synchronize, free_initmem, and exec.
++	 * CFS starves task 1 when kworkers have lower vruntime.
++	 * SCHED_FIFO ensures init always gets CPU when runnable. */
++	neo_putc('j');  /* (kept SCHED_FIFO) */
++
++	/* NEORV32 nommu: restore normal late-boot sequence.
++	 * async_synchronize_full has 120s timeout in async.c to prevent
++	 * permanent hangs. While init sleeps, workqueue threads drain. */
++	neo_putc('k');  /* before async_synchronize_full */
++	async_synchronize_full();
++	neo_putc('l');  /* async done */
+ 	mark_readonly();
+-
+-	/*
+-	 * Kernel mappings are now finalized - update the userspace page-table
+-	 * to finalize PTI.
+-	 */
+-	pti_finalize();
+-
+ 	system_state = SYSTEM_RUNNING;
+-	numa_default_policy();
+-
+-	rcu_end_inkernel_boot();
+-
+-	do_sysctl_args();
++	neo_putc('L');  /* SYSTEM_RUNNING */
++	free_initmem();
++	neo_putc('M');  /* free_initmem done */
+ 
++	neo_putc('m');  /* before run_init_process */
+ 	if (ramdisk_execute_command) {
++		neo_putc('n');  /* ramdisk_execute_command set */
+ 		ret = run_init_process(ramdisk_execute_command);
++		neo_putc('o');  /* run_init_process returned */
+ 		if (!ret)
+ 			return 0;
+ 		pr_err("Failed to execute %s (error %d)\n",
+@@ -1512,9 +1580,12 @@
+ 	struct file *file = filp_open("/dev/console", O_RDWR, 0);
+ 
+ 	if (IS_ERR(file)) {
++		neo_putc('!');
++		neo_putc('C');  /* console open FAILED */
+ 		pr_err("Warning: unable to open an initial console.\n");
+ 		return;
+ 	}
++	neo_putc('c');  /* console open OK */
+ 	init_dup(file);
+ 	init_dup(file);
+ 	init_dup(file);
+@@ -1523,6 +1594,7 @@
+ 
+ static noinline void __init kernel_init_freeable(void)
+ {
++	neo_putc('a');
+ 	/* Now the scheduler is fully set up and can do blocking allocations */
+ 	gfp_allowed_mask = __GFP_BITS_MASK;
+ 
+@@ -1536,26 +1608,34 @@
+ 	smp_prepare_cpus(setup_max_cpus);
+ 
+ 	workqueue_init();
++	neo_putc('b');
+ 
+ 	init_mm_internals();
++	neo_putc('c');
+ 
+ 	rcu_init_tasks_generic();
+ 	do_pre_smp_initcalls();
+ 	lockup_detector_init();
++	neo_putc('d');
+ 
+ 	smp_init();
+ 	sched_init_smp();
++	neo_putc('e');
+ 
+ 	workqueue_init_topology();
+ 	padata_init();
+ 	page_alloc_init_late();
++	neo_putc('f');
+ 
+ 	do_basic_setup();
++	neo_putc('g');
+ 
+ 	kunit_run_all_tests();
+-
++	neo_putc('1');  /* before wait_for_initramfs */
+ 	wait_for_initramfs();
++	neo_putc('2');  /* before console_on_rootfs */
+ 	console_on_rootfs();
++	neo_putc('h');
+ 
+ 	/*
+ 	 * check if there is an early userspace init.  If yes, let it do all
+--- a/init/initramfs.c
++++ b/init/initramfs.c
+@@ -760,11 +760,13 @@
+ 
+ static int __init populate_rootfs(void)
+ {
+-	initramfs_cookie = async_schedule_domain(do_populate_rootfs, NULL,
+-						 &initramfs_domain);
++	/* NEORV32: run synchronously to avoid blocking the unbound pool.
++	 * On single-core 50 MHz, async gives no benefit and the unbound
++	 * worker processing this blocks flush_work barriers for other
++	 * initcalls (deferred_probe). */
++	do_populate_rootfs(NULL, 0);
++	initramfs_cookie = 1;	/* mark as completed for wait_for_initramfs() */
+ 	usermodehelper_enable();
+-	if (!initramfs_async)
+-		wait_for_initramfs();
+ 	return 0;
+ }
+ rootfs_initcall(populate_rootfs);
+--- a/fs/exec.c
++++ b/fs/exec.c
+@@ -1751,10 +1751,24 @@
+ 	struct linux_binfmt *fmt;
+ 	int retval;
+ 
++	/* NEORV32 debug */
++	{
++		volatile unsigned int *_u = (volatile unsigned int *)0xfff50000;
++		volatile unsigned int *_d = (volatile unsigned int *)0xfff50004;
++		while (!(*_u & (1u << 19))); *_d = '{';
++	}
++
+ 	retval = prepare_binprm(bprm);
+ 	if (retval < 0)
+ 		return retval;
+ 
++	/* NEORV32 debug */
++	{
++		volatile unsigned int *_u = (volatile unsigned int *)0xfff50000;
++		volatile unsigned int *_d = (volatile unsigned int *)0xfff50004;
++		while (!(*_u & (1u << 19))); *_d = '|';
++	}
++
+ 	retval = security_bprm_check(bprm);
+ 	if (retval)
+ 		return retval;
+@@ -1846,6 +1860,14 @@
+ 	struct file *file;
+ 	int retval;
+ 
++	/* NEORV32 debug: marker at bprm_execve entry */
++	{
++		volatile unsigned int *_u = (volatile unsigned int *)0xfff50000;
++		volatile unsigned int *_d = (volatile unsigned int *)0xfff50004;
++		while (!(*_u & (1u << 19))); *_d = 'B';
++		while (!(*_u & (1u << 19))); *_d = '0' + (current->pid % 10);
++	}
++
+ 	retval = prepare_bprm_creds(bprm);
+ 	if (retval)
+ 		return retval;
+@@ -1859,11 +1881,25 @@
+ 	current->in_execve = 1;
+ 	sched_mm_cid_before_execve(current);
+ 
++	/* NEORV32 debug: before open */
++	{
++		volatile unsigned int *_u = (volatile unsigned int *)0xfff50000;
++		volatile unsigned int *_d = (volatile unsigned int *)0xfff50004;
++		while (!(*_u & (1u << 19))); *_d = 'O';
++	}
++
+ 	file = do_open_execat(fd, filename, flags);
+ 	retval = PTR_ERR(file);
+ 	if (IS_ERR(file))
+ 		goto out_unmark;
+ 
++	/* NEORV32 debug: before sched_exec */
++	{
++		volatile unsigned int *_u = (volatile unsigned int *)0xfff50000;
++		volatile unsigned int *_d = (volatile unsigned int *)0xfff50004;
++		while (!(*_u & (1u << 19))); *_d = 'S';
++	}
++
+ 	sched_exec();
+ 
+ 	bprm->file = file;
+@@ -2009,19 +2045,44 @@
+ 	int fd = AT_FDCWD;
+ 	int retval;
+ 
++	/* NEORV32 debug: absolute first line of kernel_execve */
++	{
++		volatile unsigned int *_u = (volatile unsigned int *)0xfff50000;
++		volatile unsigned int *_d = (volatile unsigned int *)0xfff50004;
++		while (!(*_u & (1u << 19))); *_d = 'Q';
++		while (!(*_u & (1u << 19))); *_d = '2';
++	}
+ 	/* It is non-sense for kernel threads to call execve */
+ 	if (WARN_ON_ONCE(current->flags & PF_KTHREAD))
+ 		return -EINVAL;
+-
++	{
++		volatile unsigned int *_u = (volatile unsigned int *)0xfff50000;
++		volatile unsigned int *_d = (volatile unsigned int *)0xfff50004;
++		while (!(*_u & (1u << 19))); *_d = 'Q';
++		while (!(*_u & (1u << 19))); *_d = '3';
++	}
+ 	filename = getname_kernel(kernel_filename);
+ 	if (IS_ERR(filename))
+ 		return PTR_ERR(filename);
+ 
++	/* NEORV32 debug: kernel_execve markers */
++	{
++		volatile unsigned int *_u = (volatile unsigned int *)0xfff50000;
++		volatile unsigned int *_d = (volatile unsigned int *)0xfff50004;
++		while (!(*_u & (1u << 19))); *_d = 'x';
++		while (!(*_u & (1u << 19))); *_d = '1';
++	}
+ 	bprm = alloc_bprm(fd, filename);
+ 	if (IS_ERR(bprm)) {
+ 		retval = PTR_ERR(bprm);
+ 		goto out_ret;
+ 	}
++	{
++		volatile unsigned int *_u = (volatile unsigned int *)0xfff50000;
++		volatile unsigned int *_d = (volatile unsigned int *)0xfff50004;
++		while (!(*_u & (1u << 19))); *_d = 'x';
++		while (!(*_u & (1u << 19))); *_d = '2';
++	}
+ 
+ 	retval = count_strings_kernel(argv);
+ 	if (WARN_ON_ONCE(retval == 0))
+@@ -2038,6 +2099,12 @@
+ 	retval = bprm_stack_limits(bprm);
+ 	if (retval < 0)
+ 		goto out_free;
++	{
++		volatile unsigned int *_u = (volatile unsigned int *)0xfff50000;
++		volatile unsigned int *_d = (volatile unsigned int *)0xfff50004;
++		while (!(*_u & (1u << 19))); *_d = 'x';
++		while (!(*_u & (1u << 19))); *_d = '3';
++	}
+ 
+ 	retval = copy_string_kernel(bprm->filename, bprm);
+ 	if (retval < 0)
+@@ -2051,6 +2118,12 @@
+ 	retval = copy_strings_kernel(bprm->argc, argv, bprm);
+ 	if (retval < 0)
+ 		goto out_free;
++	{
++		volatile unsigned int *_u = (volatile unsigned int *)0xfff50000;
++		volatile unsigned int *_d = (volatile unsigned int *)0xfff50004;
++		while (!(*_u & (1u << 19))); *_d = 'x';
++		while (!(*_u & (1u << 19))); *_d = '4';
++	}
+ 
+ 	retval = bprm_execve(bprm, fd, filename, 0);
+ out_free:
+--- a/fs/binfmt_elf_fdpic.c
++++ b/fs/binfmt_elf_fdpic.c
+@@ -199,6 +199,14 @@
+ 
+ 	kdebug("____ LOAD %d ____", current->pid);
+ 
++	/* NEORV32 debug: print 'F' at FDPIC entry */
++	{
++		volatile unsigned int *_u = (volatile unsigned int *)0xfff50000;
++		volatile unsigned int *_d = (volatile unsigned int *)0xfff50004;
++		while (!(*_u & (1u << 19))); *_d = 'F';
++		while (!(*_u & (1u << 19))); *_d = 'D';
++	}
++
+ 	memset(&exec_params, 0, sizeof(exec_params));
+ 	memset(&interp_params, 0, sizeof(interp_params));
+ 
+@@ -461,6 +469,27 @@
+ 	finalize_exec(bprm);
+ 	/* everything is now ready... get the userspace context ready to roll */
+ 	entryaddr = interp_params.entry_addr ?: exec_params.entry_addr;
++	/* NEORV32 debug: print entry and stack addresses */
++	{
++		volatile unsigned int *_u = (volatile unsigned int *)0xfff50000;
++		volatile unsigned int *_d = (volatile unsigned int *)0xfff50004;
++		unsigned long ea = entryaddr, sa = current->mm->start_stack;
++		int i;
++		while (!(*_u & (1u << 19))); *_d = 'Z';
++		while (!(*_u & (1u << 19))); *_d = 'e';
++		for (i = 28; i >= 0; i -= 4) {
++			unsigned char nib = (ea >> i) & 0xf;
++			while (!(*_u & (1u << 19)));
++			*_d = nib < 10 ? '0' + nib : 'a' + nib - 10;
++		}
++		while (!(*_u & (1u << 19))); *_d = 's';
++		for (i = 28; i >= 0; i -= 4) {
++			unsigned char nib = (sa >> i) & 0xf;
++			while (!(*_u & (1u << 19)));
++			*_d = nib < 10 ? '0' + nib : 'a' + nib - 10;
++		}
++		while (!(*_u & (1u << 19))); *_d = '\n';
++	}
+ 	start_thread(regs, entryaddr, current->mm->start_stack);
+ 
+ 	retval = 0;
+--- a/drivers/tty/serial/neorv32_uart.c
++++ b/drivers/tty/serial/neorv32_uart.c
+@@ -0,0 +1,431 @@
++// SPDX-License-Identifier: GPL-2.0
++/*
++ * NEORV32 UART serial driver for Linux
++ *
++ * Register layout (8 bytes per UART):
++ *   +0x0  CTRL  [0]:EN  [5:3]:PRSC  [15:6]:BAUD_DIV
++ *               [16]:RX_NEMPTY  [17]:RX_FULL  [18]:TX_EMPTY  [19]:TX_NFULL
++ *               [20]:IRQ_RX_NEMPTY  [21]:IRQ_RX_FULL
++ *               [22]:IRQ_TX_EMPTY   [23]:IRQ_TX_NFULL
++ *               [30]:RX_OVER  [31]:TX_BUSY
++ *   +0x4  DATA  [7:0]: TX/RX byte
++ *
++ * Polling mode with kthread (not timer) to ensure tty flip buffer flush
++ * runs in process context — required on UP PREEMPT_NONE where unbound
++ * work queue kworkers may not get scheduled promptly.
++ */
++
++#include <linux/console.h>
++#include <linux/init.h>
++#include <linux/kthread.h>
++#include <linux/module.h>
++#include <linux/of.h>
++#include <linux/platform_device.h>
++#include <linux/serial.h>
++#include <linux/serial_core.h>
++#include <linux/tty_flip.h>
++#include <linux/timer.h>
++#include <linux/delay.h>
++#include <linux/io.h>
++
++/* Forward declare debug function */
++static void neo_uart_dbg(char c);
++
++/* tty_ldisc_receive_buf from drivers/tty/tty_buffer.c */
++#include <linux/tty_ldisc.h>
++
++#define DRIVER_NAME	"neorv32-uart"
++#define DEV_NAME	"ttyNEO"
++#define NEORV32_NR	1
++
++/* Register offsets */
++#define NEO_CTRL	0x00
++#define NEO_DATA	0x04
++
++/* CTRL register bits */
++#define CTRL_EN			BIT(0)
++#define CTRL_PRSC_SHIFT		3
++#define CTRL_BAUD_SHIFT		6
++#define CTRL_RX_NEMPTY		BIT(16)
++#define CTRL_RX_FULL		BIT(17)
++#define CTRL_TX_EMPTY		BIT(18)
++#define CTRL_TX_NFULL		BIT(19)
++#define CTRL_TX_BUSY		BIT(31)
++
++struct neorv32_port {
++	struct uart_port port;
++	struct task_struct *poll_thread;
++	bool port_open;
++};
++
++#define to_neo_port(p) container_of(p, struct neorv32_port, port)
++
++static struct neorv32_port neo_ports[NEORV32_NR];
++
++/* ── Low-level I/O ─────────────────────────────────────────────────────── */
++
++static void neorv32_putchar(struct uart_port *port, unsigned char ch)
++{
++	while (!(readl(port->membase + NEO_CTRL) & CTRL_TX_NFULL))
++		cpu_relax();
++	writel(ch, port->membase + NEO_DATA);
++}
++
++/* neorv32_rx_chars is replaced by neorv32_rx_direct + tty_ldisc_receive_buf
++ * in the kthread.  No flip buffer needed.
++ */
++
++static void neorv32_tx_chars(struct uart_port *port)
++{
++	u8 ch;
++
++	uart_port_tx(port, ch,
++		readl(port->membase + NEO_CTRL) & CTRL_TX_NFULL,
++		writel(ch, port->membase + NEO_DATA));
++}
++
++/* ── Polling kthread ──────────────────────────────────────────────────── */
++
++/*
++ * Read RX chars directly into a local buffer (not flip buffer).
++ * Returns number of chars read.
++ */
++static int neorv32_rx_direct(struct uart_port *port, u8 *buf, int max)
++{
++	int n = 0;
++
++	while (n < max && (readl(port->membase + NEO_CTRL) & CTRL_RX_NEMPTY)) {
++		buf[n++] = readl(port->membase + NEO_DATA) & 0xFF;
++		port->icount.rx++;
++	}
++	return n;
++}
++
++static int neorv32_poll_thread(void *data)
++{
++	struct neorv32_port *neo = data;
++	struct uart_port *port = &neo->port;
++	struct tty_struct *tty;
++	struct tty_ldisc *ld;
++	unsigned long flags;
++	u8 rxbuf[64];
++	u8 flags_buf[64];
++	int got;
++
++	while (!kthread_should_stop()) {
++		/* RX: read chars from UART hardware */
++		spin_lock_irqsave(&port->lock, flags);
++		got = neorv32_rx_direct(port, rxbuf, sizeof(rxbuf));
++		spin_unlock_irqrestore(&port->lock, flags);
++
++		if (got && port->state) {
++			tty = port->state->port.tty;
++			if (tty) {
++				ld = tty_ldisc_ref(tty);
++				if (ld) {
++					memset(flags_buf, TTY_NORMAL, got);
++					tty_ldisc_receive_buf(ld, rxbuf,
++							      flags_buf, got);
++					tty_ldisc_deref(ld);
++				}
++			}
++		}
++
++		/* TX: drain any pending output */
++		spin_lock_irqsave(&port->lock, flags);
++		neorv32_tx_chars(port);
++		spin_unlock_irqrestore(&port->lock, flags);
++
++		/* Yield CPU so other tasks (e.g. shell) can run */
++		schedule_timeout_interruptible(1);
++	}
++
++	return 0;
++}
++
++/* ── uart_ops ──────────────────────────────────────────────────────────── */
++
++static unsigned int neorv32_tx_empty(struct uart_port *port)
++{
++	return (readl(port->membase + NEO_CTRL) & CTRL_TX_EMPTY)
++		? TIOCSER_TEMT : 0;
++}
++
++static void neorv32_set_mctrl(struct uart_port *port, unsigned int mctrl) {}
++static unsigned int neorv32_get_mctrl(struct uart_port *port)
++{
++	return TIOCM_CTS | TIOCM_DSR | TIOCM_CAR;
++}
++static void neorv32_stop_tx(struct uart_port *port) {}
++static void neorv32_stop_rx(struct uart_port *port) {}
++
++static void neorv32_start_tx(struct uart_port *port)
++{
++	neorv32_tx_chars(port);
++}
++
++static int neorv32_startup(struct uart_port *port)
++{
++	struct neorv32_port *neo = to_neo_port(port);
++	u32 ctrl;
++
++	neo_uart_dbg('S');  /* startup called */
++
++	/* Ensure UART is enabled (U-Boot already set baud rate) */
++	ctrl = readl(port->membase + NEO_CTRL);
++	writel(ctrl | CTRL_EN, port->membase + NEO_CTRL);
++
++	neo->port_open = true;
++
++	/* Start polling kthread */
++	neo->poll_thread = kthread_run(neorv32_poll_thread, neo,
++				       "neorv32_poll");
++	if (IS_ERR(neo->poll_thread)) {
++		neo->poll_thread = NULL;
++		neo_uart_dbg('!');
++		return PTR_ERR(neo->poll_thread);
++	}
++
++	neo_uart_dbg('s');  /* startup done, kthread started */
++	return 0;
++}
++
++static void neorv32_shutdown(struct uart_port *port)
++{
++	struct neorv32_port *neo = to_neo_port(port);
++
++	neo->port_open = false;
++	if (neo->poll_thread) {
++		kthread_stop(neo->poll_thread);
++		neo->poll_thread = NULL;
++	}
++}
++
++static void neorv32_set_termios(struct uart_port *port,
++				struct ktermios *new,
++				const struct ktermios *old)
++{
++	unsigned int baud;
++	unsigned long flags;
++
++	spin_lock_irqsave(&port->lock, flags);
++	baud = uart_get_baud_rate(port, new, old, 9600, 115200);
++	uart_update_timeout(port, new->c_cflag, baud);
++	spin_unlock_irqrestore(&port->lock, flags);
++}
++
++static const char *neorv32_type(struct uart_port *port)
++{
++	return "neorv32-uart";
++}
++
++static void neorv32_config_port(struct uart_port *port, int flags)
++{
++	port->type = 1;
++}
++
++static int neorv32_verify_port(struct uart_port *port,
++			       struct serial_struct *ser)
++{
++	return 0;
++}
++
++static const struct uart_ops neorv32_uart_ops = {
++	.tx_empty	= neorv32_tx_empty,
++	.set_mctrl	= neorv32_set_mctrl,
++	.get_mctrl	= neorv32_get_mctrl,
++	.stop_tx	= neorv32_stop_tx,
++	.start_tx	= neorv32_start_tx,
++	.stop_rx	= neorv32_stop_rx,
++	.startup	= neorv32_startup,
++	.shutdown	= neorv32_shutdown,
++	.set_termios	= neorv32_set_termios,
++	.type		= neorv32_type,
++	.config_port	= neorv32_config_port,
++	.verify_port	= neorv32_verify_port,
++};
++
++/* ── Console ───────────────────────────────────────────────────────────── */
++
++#ifdef CONFIG_SERIAL_NEORV32_CONSOLE
++
++static struct uart_driver neorv32_uart_driver;
++
++static void neorv32_console_write(struct console *co, const char *s,
++				  unsigned int count)
++{
++	struct uart_port *port = &neo_ports[co->index].port;
++	unsigned long flags;
++
++	spin_lock_irqsave(&port->lock, flags);
++	uart_console_write(port, s, count, neorv32_putchar);
++	spin_unlock_irqrestore(&port->lock, flags);
++}
++
++static int neorv32_console_setup(struct console *co, char *options)
++{
++	struct uart_port *port;
++	int baud = 115200;
++	int bits = 8;
++	int parity = 'n';
++	int flow = 'n';
++
++	if (co->index >= NEORV32_NR || co->index < 0)
++		co->index = 0;
++
++	port = &neo_ports[co->index].port;
++	if (!port->membase)
++		return -ENODEV;
++
++	if (options)
++		uart_parse_options(options, &baud, &parity, &bits, &flow);
++
++	return uart_set_options(port, co, baud, parity, bits, flow);
++}
++
++static struct console neorv32_console = {
++	.name	= DEV_NAME,
++	.write	= neorv32_console_write,
++	.device	= uart_console_device,
++	.setup	= neorv32_console_setup,
++	.flags	= CON_PRINTBUFFER,
++	.index	= -1,
++	.data	= &neorv32_uart_driver,
++};
++
++#define NEORV32_CONSOLE	(&neorv32_console)
++
++/* earlycon */
++static void neorv32_earlycon_write(struct console *con, const char *s,
++				   unsigned int n)
++{
++	struct earlycon_device *dev = con->data;
++
++	uart_console_write(&dev->port, s, n, neorv32_putchar);
++}
++
++static int __init neorv32_earlycon_setup(struct earlycon_device *dev,
++					 const char *options)
++{
++	if (!dev->port.membase)
++		return -ENODEV;
++
++	dev->con->write = neorv32_earlycon_write;
++	return 0;
++}
++
++OF_EARLYCON_DECLARE(neorv32, "stnolting,neorv32-uart", neorv32_earlycon_setup);
++EARLYCON_DECLARE(neorv32, neorv32_earlycon_setup);
++
++#else
++#define NEORV32_CONSOLE	NULL
++#endif /* CONFIG_SERIAL_NEORV32_CONSOLE */
++
++/* ── Platform driver ───────────────────────────────────────────────────── */
++
++static struct uart_driver neorv32_uart_driver = {
++	.owner		= THIS_MODULE,
++	.driver_name	= DRIVER_NAME,
++	.dev_name	= DEV_NAME,
++	.nr		= NEORV32_NR,
++	.cons		= NEORV32_CONSOLE,
++};
++
++static int neorv32_probe(struct platform_device *pdev)
++{
++	struct neorv32_port *neo;
++	struct uart_port *port;
++	int id, ret;
++
++	neo_uart_dbg('P');  /* probe entry */
++	id = of_alias_get_id(pdev->dev.of_node, "serial");
++	if (id < 0 || id >= NEORV32_NR)
++		id = 0;
++
++	neo = &neo_ports[id];
++	port = &neo->port;
++
++	port->membase = devm_platform_get_and_ioremap_resource(pdev, 0, NULL);
++	if (IS_ERR(port->membase))
++		return PTR_ERR(port->membase);
++
++	port->dev = &pdev->dev;
++	port->iotype = UPIO_MEM;
++	port->flags = UPF_BOOT_AUTOCONF;
++	port->ops = &neorv32_uart_ops;
++	port->fifosize = 16;
++	port->type = PORT_UNKNOWN;
++	port->line = id;
++	spin_lock_init(&port->lock);
++
++	platform_set_drvdata(pdev, port);
++
++	neo_uart_dbg('Q');  /* before uart_add_one_port */
++	ret = uart_add_one_port(&neorv32_uart_driver, port);
++	neo_uart_dbg('R');  /* after uart_add_one_port */
++	neo_uart_dbg('0' + ret);  /* return value */
++	return ret;
++}
++
++static int neorv32_remove(struct platform_device *pdev)
++{
++	struct uart_port *port = platform_get_drvdata(pdev);
++
++	uart_remove_one_port(&neorv32_uart_driver, port);
++	return 0;
++}
++
++static const struct of_device_id neorv32_of_match[] = {
++	{ .compatible = "stnolting,neorv32-uart" },
++	{}
++};
++MODULE_DEVICE_TABLE(of, neorv32_of_match);
++
++static struct platform_driver neorv32_platform_driver = {
++	.probe	= neorv32_probe,
++	.remove	= neorv32_remove,
++	.driver	= {
++		.name		= DRIVER_NAME,
++		.of_match_table	= neorv32_of_match,
++	},
++};
++
++/* Direct UART write for debug - bypasses console framework */
++static void neo_uart_dbg(char c)
++{
++	volatile unsigned int *ctrl = (volatile unsigned int *)0xfff50000;
++	volatile unsigned int *data = (volatile unsigned int *)0xfff50004;
++	while (!((*ctrl) & (1u << 19))) ;  /* wait TX_NFULL */
++	*data = c;
++}
++
++static int __init neorv32_uart_init(void)
++{
++	int ret;
++
++	neo_uart_dbg('(');  /* entering uart_init */
++	ret = uart_register_driver(&neorv32_uart_driver);
++	neo_uart_dbg('*');  /* uart_register_driver done */
++	if (ret)
++		return ret;
++
++	ret = platform_driver_register(&neorv32_platform_driver);
++	neo_uart_dbg('+');  /* platform_driver_register done */
++	if (ret)
++		uart_unregister_driver(&neorv32_uart_driver);
++
++	neo_uart_dbg(')');  /* uart_init returning */
++	return ret;
++}
++
++static void __exit neorv32_uart_exit(void)
++{
++	platform_driver_unregister(&neorv32_platform_driver);
++	uart_unregister_driver(&neorv32_uart_driver);
++}
++
++module_init(neorv32_uart_init);
++module_exit(neorv32_uart_exit);
++
++MODULE_DESCRIPTION("NEORV32 UART serial driver");
++MODULE_LICENSE("GPL");

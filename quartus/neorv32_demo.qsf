@@ -1,0 +1,142 @@
+# Quartus Settings for NEORV32 Demo — AX301 (EP4CE6F17C8)
+
+set_global_assignment -name FAMILY "Cyclone IV E"
+set_global_assignment -name DEVICE EP4CE6F17C8
+set_global_assignment -name TOP_LEVEL_ENTITY ax301_top
+set_global_assignment -name ORIGINAL_QUARTUS_VERSION 21.1
+set_global_assignment -name PROJECT_CREATION_TIME_DATE "2026-03-23"
+set_global_assignment -name LAST_QUARTUS_VERSION "21.1.0 Lite Edition"
+
+# VHDL standard
+set_global_assignment -name VHDL_INPUT_VERSION VHDL_2008
+
+# ── NEORV32 RTL sources (neorv32 library, ordered per file_list_soc.f) ──────
+set_global_assignment -name VHDL_FILE ../neorv32/rtl/core/neorv32_package.vhd -library neorv32
+set_global_assignment -name VHDL_FILE ../neorv32/rtl/core/neorv32_sys.vhd -library neorv32
+set_global_assignment -name VHDL_FILE ../neorv32/rtl/core/neorv32_cpu_decompressor.vhd -library neorv32
+set_global_assignment -name VHDL_FILE ../neorv32/rtl/core/neorv32_cpu_frontend.vhd -library neorv32
+set_global_assignment -name VHDL_FILE ../neorv32/rtl/core/neorv32_cpu_control.vhd -library neorv32
+set_global_assignment -name VHDL_FILE ../neorv32/rtl/core/neorv32_cpu_hwtrig.vhd -library neorv32
+set_global_assignment -name VHDL_FILE ../neorv32/rtl/core/neorv32_prim.vhd -library neorv32
+set_global_assignment -name VHDL_FILE ../neorv32/rtl/core/neorv32_cpu_counters.vhd -library neorv32
+set_global_assignment -name VHDL_FILE ../neorv32/rtl/core/neorv32_cpu_regfile.vhd -library neorv32
+set_global_assignment -name VHDL_FILE ../neorv32/rtl/core/neorv32_cpu_alu_shifter.vhd -library neorv32
+set_global_assignment -name VHDL_FILE ../neorv32/rtl/core/neorv32_cpu_alu_muldiv.vhd -library neorv32
+set_global_assignment -name VHDL_FILE ../neorv32/rtl/core/neorv32_cpu_alu_bitmanip.vhd -library neorv32
+set_global_assignment -name VHDL_FILE ../neorv32/rtl/core/neorv32_cpu_alu_fpu.vhd -library neorv32
+set_global_assignment -name VHDL_FILE ../neorv32/rtl/core/neorv32_cpu_alu_cfu.vhd -library neorv32
+set_global_assignment -name VHDL_FILE ../neorv32/rtl/core/neorv32_cpu_alu_cond.vhd -library neorv32
+set_global_assignment -name VHDL_FILE ../neorv32/rtl/core/neorv32_cpu_alu_crypto.vhd -library neorv32
+set_global_assignment -name VHDL_FILE ../neorv32/rtl/core/neorv32_cpu_alu.vhd -library neorv32
+set_global_assignment -name VHDL_FILE ../neorv32/rtl/core/neorv32_cpu_lsu.vhd -library neorv32
+set_global_assignment -name VHDL_FILE ../neorv32/rtl/core/neorv32_cpu_pmp.vhd -library neorv32
+set_global_assignment -name VHDL_FILE ../neorv32/rtl/core/neorv32_cpu_trace.vhd -library neorv32
+set_global_assignment -name VHDL_FILE ../neorv32/rtl/core/neorv32_cpu.vhd -library neorv32
+set_global_assignment -name VHDL_FILE ../neorv32/rtl/core/neorv32_cache.vhd -library neorv32
+set_global_assignment -name VHDL_FILE ../neorv32/rtl/core/neorv32_bus.vhd -library neorv32
+set_global_assignment -name VHDL_FILE ../neorv32/rtl/core/neorv32_dma.vhd -library neorv32
+set_global_assignment -name VHDL_FILE ../neorv32/rtl/core/neorv32_imem.vhd -library neorv32
+set_global_assignment -name VHDL_FILE ../neorv32/rtl/core/neorv32_dmem.vhd -library neorv32
+set_global_assignment -name VHDL_FILE ../neorv32/rtl/core/neorv32_xbus.vhd -library neorv32
+set_global_assignment -name VHDL_FILE ../neorv32/rtl/core/neorv32_bootrom.vhd -library neorv32
+set_global_assignment -name VHDL_FILE ../neorv32/rtl/core/neorv32_cfs.vhd -library neorv32
+set_global_assignment -name VHDL_FILE ../neorv32/rtl/core/neorv32_sdi.vhd -library neorv32
+set_global_assignment -name VHDL_FILE ../neorv32/rtl/core/neorv32_gpio.vhd -library neorv32
+set_global_assignment -name VHDL_FILE ../neorv32/rtl/core/neorv32_wdt.vhd -library neorv32
+set_global_assignment -name VHDL_FILE ../neorv32/rtl/core/neorv32_clint.vhd -library neorv32
+set_global_assignment -name VHDL_FILE ../neorv32/rtl/core/neorv32_uart.vhd -library neorv32
+set_global_assignment -name VHDL_FILE ../neorv32/rtl/core/neorv32_spi.vhd -library neorv32
+set_global_assignment -name VHDL_FILE ../neorv32/rtl/core/neorv32_twi.vhd -library neorv32
+set_global_assignment -name VHDL_FILE ../neorv32/rtl/core/neorv32_twd.vhd -library neorv32
+set_global_assignment -name VHDL_FILE ../neorv32/rtl/core/neorv32_pwm.vhd -library neorv32
+set_global_assignment -name VHDL_FILE ../neorv32/rtl/core/neorv32_trng.vhd -library neorv32
+set_global_assignment -name VHDL_FILE ../neorv32/rtl/core/neorv32_neoled.vhd -library neorv32
+set_global_assignment -name VHDL_FILE ../neorv32/rtl/core/neorv32_gptmr.vhd -library neorv32
+set_global_assignment -name VHDL_FILE ../neorv32/rtl/core/neorv32_onewire.vhd -library neorv32
+set_global_assignment -name VHDL_FILE ../neorv32/rtl/core/neorv32_slink.vhd -library neorv32
+set_global_assignment -name VHDL_FILE ../neorv32/rtl/core/neorv32_tracer.vhd -library neorv32
+set_global_assignment -name VHDL_FILE ../neorv32/rtl/core/neorv32_sysinfo.vhd -library neorv32
+set_global_assignment -name VHDL_FILE ../neorv32/rtl/core/neorv32_debug_dtm.vhd -library neorv32
+set_global_assignment -name VHDL_FILE ../neorv32/rtl/core/neorv32_debug_auth.vhd -library neorv32
+set_global_assignment -name VHDL_FILE ../neorv32/rtl/core/neorv32_debug_dm.vhd -library neorv32
+set_global_assignment -name VHDL_FILE ../neorv32/rtl/core/neorv32_top.vhd -library neorv32
+set_global_assignment -name VHDL_FILE ../neorv32/rtl/core/neorv32_cache_ram.vhd -library neorv32
+set_global_assignment -name VHDL_FILE ../neorv32/rtl/core/neorv32_imem_image.vhd -library neorv32
+set_global_assignment -name VHDL_FILE ../neorv32/rtl/core/neorv32_imem_rom.vhd -library neorv32
+set_global_assignment -name VHDL_FILE ../neorv32/rtl/core/neorv32_imem_ram.vhd -library neorv32
+set_global_assignment -name VHDL_FILE ../neorv32/rtl/core/neorv32_dmem_ram.vhd -library neorv32
+set_global_assignment -name VHDL_FILE ../neorv32/rtl/core/neorv32_bootrom_image.vhd -library neorv32
+set_global_assignment -name VHDL_FILE ../neorv32/rtl/core/neorv32_bootrom_rom.vhd -library neorv32
+
+# ── AX301 SoC wrapper (work library) ────────────────────────────────────────
+set_global_assignment -name VHDL_FILE ../rtl/ax301_top.vhd
+
+# ── Verilog modules (work library) ──────────────────────────────────────────
+set_global_assignment -name VERILOG_FILE ../rtl/wb_sdram_ctrl.v
+set_global_assignment -name VERILOG_FILE ../rtl/sdram_ctrl.v
+
+# ── Timing constraint ────────────────────────────────────────────────────────
+set_global_assignment -name SDC_FILE neorv32_demo.sdc
+
+# ── Pin assignments (AX301 board) ────────────────────────────────────────────
+set_location_assignment PIN_E1  -to CLOCK
+set_location_assignment PIN_E16 -to KEY2
+set_location_assignment PIN_M2  -to RXD
+set_location_assignment PIN_G1  -to TXD
+set_location_assignment PIN_G15 -to LED[0]
+set_location_assignment PIN_F16 -to LED[1]
+set_location_assignment PIN_F15 -to LED[2]
+set_location_assignment PIN_D16 -to LED[3]
+
+# SDRAM
+set_location_assignment PIN_R4  -to S_CLK
+set_location_assignment PIN_R14 -to S_CKE
+set_location_assignment PIN_T6  -to S_NCS
+set_location_assignment PIN_R6  -to S_NRAS
+set_location_assignment PIN_T5  -to S_NCAS
+set_location_assignment PIN_N1  -to S_NWE
+set_location_assignment PIN_R7  -to S_BA[0]
+set_location_assignment PIN_T7  -to S_BA[1]
+set_location_assignment PIN_T8  -to S_A[0]
+set_location_assignment PIN_P9  -to S_A[1]
+set_location_assignment PIN_T9  -to S_A[2]
+set_location_assignment PIN_R9  -to S_A[3]
+set_location_assignment PIN_L16 -to S_A[4]
+set_location_assignment PIN_L15 -to S_A[5]
+set_location_assignment PIN_N16 -to S_A[6]
+set_location_assignment PIN_N15 -to S_A[7]
+set_location_assignment PIN_P16 -to S_A[8]
+set_location_assignment PIN_P15 -to S_A[9]
+set_location_assignment PIN_R8  -to S_A[10]
+set_location_assignment PIN_R16 -to S_A[11]
+set_location_assignment PIN_T15 -to S_A[12]
+set_location_assignment PIN_N2  -to S_DQM[0]
+set_location_assignment PIN_T14 -to S_DQM[1]
+set_location_assignment PIN_R5  -to S_DB[0]
+set_location_assignment PIN_T4  -to S_DB[1]
+set_location_assignment PIN_T3  -to S_DB[2]
+set_location_assignment PIN_R3  -to S_DB[3]
+set_location_assignment PIN_T2  -to S_DB[4]
+set_location_assignment PIN_R1  -to S_DB[5]
+set_location_assignment PIN_P2  -to S_DB[6]
+set_location_assignment PIN_P1  -to S_DB[7]
+set_location_assignment PIN_R13 -to S_DB[8]
+set_location_assignment PIN_T13 -to S_DB[9]
+set_location_assignment PIN_R12 -to S_DB[10]
+set_location_assignment PIN_T12 -to S_DB[11]
+set_location_assignment PIN_T10 -to S_DB[12]
+set_location_assignment PIN_R10 -to S_DB[13]
+set_location_assignment PIN_T11 -to S_DB[14]
+set_location_assignment PIN_R11 -to S_DB[15]
+
+# SDRAM I/O drive strength (from riscv_demo, proven working)
+set_instance_assignment -name CURRENT_STRENGTH_NEW 8MA -to S_*
+set_instance_assignment -name FAST_OUTPUT_REGISTER ON  -to S_*
+
+# ── Global settings ──────────────────────────────────────────────────────────
+set_global_assignment -name STRATIX_DEVICE_IO_STANDARD "3.3-V LVTTL"
+set_global_assignment -name CYCLONEII_RESERVE_NCEO_AFTER_CONFIGURATION "USE AS REGULAR IO"
+set_global_assignment -name RESERVE_ALL_UNUSED_PINS_WEAK_PULLUP "AS INPUT TRI-STATED"
+set_global_assignment -name MIN_CORE_JUNCTION_TEMP 0
+set_global_assignment -name MAX_CORE_JUNCTION_TEMP 85
+set_global_assignment -name NUM_PARALLEL_PROCESSORS ALL

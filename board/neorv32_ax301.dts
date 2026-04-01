@@ -1,0 +1,79 @@
+// SPDX-License-Identifier: GPL-2.0+
+// Device tree for NEORV32 RV32IMAC on HeiJin AX301 (EP4CE6F17C8)
+// nommu Linux (M-mode), 32 MB SDRAM
+//
+// Memory map:
+//   0x00000000 - IMEM (8 KB, M9K BRAM)
+//   0x40000000 - SDRAM 32 MB (HY57V2562GTR)
+//   0x80000000 - DMEM (8 KB, M9K BRAM)
+//   0xFFF40000 - CLINT (MTIME at +0xBFF8, MTIMECMP at +0x4000)
+//   0xFFF50000 - UART0 (16-entry TX/RX FIFO)
+
+/dts-v1/;
+
+/ {
+	#address-cells = <1>;
+	#size-cells = <1>;
+	compatible = "stnolting,neorv32-ax301";
+	model = "NEORV32 on HeiJin AX301 (EP4CE6)";
+
+	aliases {
+		serial0 = &uart0;
+	};
+
+	chosen {
+		bootargs = "earlycon=neorv32,0xfff50000 console=ttyNEO0,115200";
+		stdout-path = "serial0:115200n8";
+	};
+
+	cpus {
+		#address-cells = <1>;
+		#size-cells = <0>;
+		timebase-frequency = <50000000>;
+
+		cpu0: cpu@0 {
+			device_type = "cpu";
+			compatible = "stnolting,neorv32", "riscv";
+			riscv,isa = "rv32imac";
+			riscv,isa-base = "rv32i";
+			riscv,isa-extensions = "i", "m", "a", "c",
+					      "zicsr", "zifencei";
+			mmu-type = "riscv,none";
+			clock-frequency = <50000000>;
+			reg = <0>;
+			status = "okay";
+
+			cpu0_intc: interrupt-controller {
+				#interrupt-cells = <1>;
+				compatible = "riscv,cpu-intc";
+				interrupt-controller;
+			};
+		};
+	};
+
+	memory@40000000 {
+		device_type = "memory";
+		reg = <0x40000000 0x02000000>;  /* 32 MB SDRAM */
+	};
+
+	soc {
+		#address-cells = <1>;
+		#size-cells = <1>;
+		compatible = "simple-bus";
+		ranges;
+
+		clint0: clint@fff40000 {
+			compatible = "riscv,clint0";
+			reg = <0xfff40000 0xc000>;
+			interrupts-extended = <&cpu0_intc 3 &cpu0_intc 7>;
+		};
+
+		uart0: serial@fff50000 {
+			compatible = "stnolting,neorv32-uart";
+			reg = <0xfff50000 0x8>;
+			clock-frequency = <50000000>;
+			current-speed = <115200>;
+			status = "okay";
+		};
+	};
+};

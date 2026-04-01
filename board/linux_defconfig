@@ -1,0 +1,116 @@
+# Linux kernel defconfig for NEORV32 RV32IMAC nommu on AX301
+# Based on arch/riscv/configs/nommu_virt_defconfig, adapted for NEORV32 hardware
+
+# CONFIG_CPU_ISOLATION is not set
+CONFIG_LOG_BUF_SHIFT=14
+CONFIG_BLK_DEV_INITRD=y
+# Embed initramfs into kernel Image (avoids DTB patching for initrd location)
+CONFIG_INITRAMFS_SOURCE="/home/test/neorv32-linux/output/neo_initramfs.cpio.gz"
+CONFIG_INITRAMFS_COMPRESSION_GZIP=y
+# CONFIG_RD_BZIP2 is not set
+# CONFIG_RD_LZMA is not set
+# CONFIG_RD_XZ is not set
+# CONFIG_RD_LZO is not set
+# CONFIG_RD_LZ4 is not set
+CONFIG_CC_OPTIMIZE_FOR_SIZE=y
+CONFIG_EXPERT=y
+# CONFIG_SYSFS_SYSCALL is not set
+# CONFIG_FHANDLE is not set
+# CONFIG_BASE_FULL is not set
+# CONFIG_EPOLL is not set
+# CONFIG_SIGNALFD is not set
+# CONFIG_TIMERFD is not set
+# CONFIG_EVENTFD is not set
+# CONFIG_AIO is not set
+# CONFIG_IO_URING is not set
+# CONFIG_ADVISE_SYSCALLS is not set
+# CONFIG_KALLSYMS is not set
+# CONFIG_VM_EVENT_COUNTERS is not set
+# CONFIG_COMPAT_BRK is not set
+CONFIG_SLUB=y
+CONFIG_SLUB_TINY=y
+
+# ── Architecture: RV32 nommu M-mode ──
+CONFIG_ARCH_RV32I=y
+# CONFIG_ARCH_RV64I is not set
+# CONFIG_MMU is not set
+CONFIG_NONPORTABLE=y
+# CONFIG_SMP is not set
+CONFIG_RISCV_ISA_C=y
+CONFIG_RISCV_ISA_M=y
+
+# ── Memory: SDRAM at 0x40000000, 32 MB ──
+CONFIG_PHYS_RAM_BASE_FIXED=y
+CONFIG_PHYS_RAM_BASE=0x40000000
+# nommu: PAGE_OFFSET must equal PHYS_RAM_BASE (kernel linked at this address)
+CONFIG_PAGE_OFFSET=0x40000000
+
+# ── Boot command line ──
+CONFIG_CMDLINE="earlycon=neorv32,0xfff50000 console=ttyNEO0,115200"
+CONFIG_CMDLINE_FORCE=y
+
+# ── Timer ──
+CONFIG_CLINT_TIMER=y
+
+CONFIG_JUMP_LABEL=y
+# CONFIG_PARTITION_ADVANCED is not set
+
+# ── Binary formats for nommu ──
+CONFIG_BINFMT_FLAT=y
+CONFIG_BINFMT_ELF_FDPIC=y
+# CONFIG_COREDUMP is not set
+
+# ── Device infrastructure ──
+CONFIG_DEVTMPFS=y
+CONFIG_DEVTMPFS_MOUNT=y
+# CONFIG_FW_LOADER is not set
+# CONFIG_ALLOW_DEV_COREDUMP is not set
+
+# ── No block devices needed (initramfs only) ──
+# CONFIG_BLOCK is not set
+
+# ── Serial: NEORV32 UART ──
+CONFIG_SERIAL_NEORV32=y
+CONFIG_SERIAL_NEORV32_CONSOLE=y
+CONFIG_SERIAL_EARLYCON=y
+CONFIG_SERIAL_OF_PLATFORM=y
+# CONFIG_SERIAL_8250 is not set
+
+# ── Input: not needed ──
+# CONFIG_INPUT_KEYBOARD is not set
+# CONFIG_INPUT_MOUSE is not set
+# CONFIG_SERIO is not set
+# CONFIG_LEGACY_PTYS is not set
+# CONFIG_LDISC_AUTOLOAD is not set
+
+# ── Misc hardware: off ──
+# CONFIG_HW_RANDOM is not set
+# CONFIG_DEVMEM is not set
+# CONFIG_HWMON is not set
+# CONFIG_VGA_CONSOLE is not set
+# CONFIG_HID is not set
+# CONFIG_USB_SUPPORT is not set
+
+# ── No network ──
+# CONFIG_NET is not set
+
+# ── No loadable modules ──
+# CONFIG_MODULES is not set
+
+# ── Filesystems ──
+CONFIG_PROC_FS=y
+CONFIG_SYSFS=y
+CONFIG_TMPFS=y
+# CONFIG_DNOTIFY is not set
+# CONFIG_INOTIFY_USER is not set
+# CONFIG_MISC_FILESYSTEMS is not set
+
+CONFIG_LSM="[]"
+
+# ── Debug ──
+CONFIG_PRINTK_TIME=y
+# CONFIG_SCHED_DEBUG is not set
+# CONFIG_RCU_TRACE is not set
+# CONFIG_FTRACE is not set
+# CONFIG_RUNTIME_TESTING_MENU is not set
+# CONFIG_DEBUG_KERNEL is not set
