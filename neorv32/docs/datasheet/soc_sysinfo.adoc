@@ -1,0 +1,126 @@
+<<<
+:sectnums:
+==== System Configuration Information Memory (SYSINFO)
+
+[cols="<3,<3,<4"]
+[grid="none"]
+|=======================
+| Hardware source files:  | neorv32_sysinfo.vhd |
+| Software driver files:  | neorv32_sysinfo.h   | link:https://stnolting.github.io/neorv32/sw/neorv32__sysinfo_8h.html[Online software reference (Doxygen)]
+| Top entity ports:       | none                |
+| Configuration generics: | all                 | most of the top's configuration generics
+| CPU interrupts:         | none                |
+|=======================
+
+**Key Features**
+
+* Provides detailed SoC configuration information
+
+
+**Overview**
+
+The SYSINFO module allows the application software to determine the setting of most of the <<_processor_top_entity_generics>>
+that are related to CPU and processor/SoC configuration. This device is always implemented - regardless of the actual hardware
+configuration since the NEORV32 software framework requires information from this device for correct operation.
+However, advanced users that do not want to use the default NEORV32 software framework can choose to disable the
+entire SYSINFO module. This might also be suitable for setups that use the processor just as wrapper for a CPU-only
+configuration.
+
+
+**Register Map**
+
+All registers of this module are read-only except for the `CLK` register. Upon reset, the `CLK` registers is initialized
+from the `CLOCK_FREQUENCY` top entity generic. Application software can override this default value in order, for example,
+to take into account a dynamic frequency scaling of the processor.
+
+.SYSINFO register map (`struct NEORV32_SYSINFO`)
+[cols="<2,<1,^1,<7"]
+[options="header",grid="all"]
+|=======================
+| Address | Name [C] | R/W | Description
+| `0xfffe0000` | `CLK`     | r/w | clock frequency in Hz (initialized from top's `CLOCK_FREQUENCY` generic)
+| `0xfffe0004` | `MISC[4]` | r/- | miscellaneous system configurations (see <<_sysinfo_miscellaneous_configuration>>)
+| `0xfffe0008` | `SOC`     | r/- | specific SoC configuration (see <<_sysinfo_soc_configuration>>)
+| `0xfffe000c` | `CACHE`   | r/- | cache configuration information (see <<_sysinfo_cache_configuration>>)
+|=======================
+
+
+===== SYSINFO - Miscellaneous Configuration
+
+.SYSINFO `MEM` Bits
+[cols="^2,<6,<10"]
+[options="header",grid="all"]
+|=======================
+| Byte | Name [C] | Description
+| `7:0`   | `SYSINFO_MISC_IMEM_MBS : SYSINFO_MISC_IMEM_LSB` | _log2_(internal IMEM size in bytes), via top's `IMEM_SIZE` generic
+| `15:8`  | `SYSINFO_MISC_DMEM_MSB : SYSINFO_MISC_DMEM_LSB` | _log2_(internal DMEM size in bytes), via top's `DMEM_SIZE` generic
+| `19:16` | `SYSINFO_MISC_HART_MSB : SYSINFO_MISC_HART_LSB` | number of physical CPU cores ("harts")
+| `21:20` | `SYSINFO_MISC_BOOT_MSB : SYSINFO_MISC_BOOT_LSB` | boot mode configuration, via top's `BOOT_MODE_SELECT` generic (see <<_boot_configuration>>))
+| `26:22` | `SYSINFO_MISC_ITMO_MSB : SYSINFO_MISC_ITMO_LSB` | _log2_(internal bus timeout cycles), see <<_bus_monitor_and_timeout>>
+| `31:27` | `SYSINFO_MISC_ETMO_MSB : SYSINFO_MISC_ETMO_LSB` | _log2_(external bus timeout cycles), see <<_bus_monitor_and_timeout>>
+|=======================
+
+
+===== SYSINFO - SoC Configuration
+
+.SYSINFO `SOC` Bits
+[cols="^2,<6,<10"]
+[options="header",grid="all"]
+|=======================
+| Bit | Name [C] | Description
+| `0`     | `SYSINFO_SOC_BOOTLOADER` | set if processor-internal bootloader is implemented (via top's `BOOT_MODE_SELECT` generic; see <<_boot_configuration>>)
+| `1`     | `SYSINFO_SOC_XBUS`       | set if external bus interface is implemented (via top's `XBUS_EN` generic)
+| `2`     | `SYSINFO_SOC_IMEM`       | set if processor-internal DMEM is implemented (via top's `IMEM_EN` generic)
+| `3`     | `SYSINFO_SOC_DMEM`       | set if processor-internal IMEM is implemented (via top's `DMEM_EN` generic)
+| `4`     | `SYSINFO_SOC_OCD`        | set if on-chip debugger is implemented (via top's `OCD_EN` generic)
+| `5`     | `SYSINFO_SOC_ICACHE`     | set if processor-internal instruction cache is implemented (via top's `ICACHE_EN` generic)
+| `6`     | `SYSINFO_SOC_DCACHE`     | set if processor-internal data cache is implemented (via top's `DCACHE_EN` generic)
+| `7`     | -                        | _reserved_, read as zero
+| `8`     | -                        | _reserved_, read as zero
+| `9`     | -                        | _reserved_, read as zero
+| `10`    | -                        | _reserved_, read as zero
+| `11`    | `SYSINFO_SOC_OCD_AUTH`   | set if on-chip debugger authentication is implemented (via top's `OCD_AUTHENTICATION` generic)
+| `12`    | `SYSINFO_SOC_IMEM_ROM`   | set if processor-internal IMEM is implemented as pre-initialized ROM (via top's `BOOT_MODE_SELECT` generic; see <<_boot_configuration>>)
+| `13`    | `SYSINFO_SOC_IO_TWD`     | set if TWD is implemented (via top's `IO_TWD_EN` generic)
+| `14`    | `SYSINFO_SOC_IO_DMA`     | set if direct memory access controller is implemented (via top's `IO_DMA_EN` generic)
+| `15`    | `SYSINFO_SOC_IO_GPIO`    | set if GPIO is implemented (via top's `IO_GPIO_EN` generic)
+| `16`    | `SYSINFO_SOC_IO_CLINT`   | set if CLINT is implemented (via top's `IO_CLINT_EN` generic)
+| `17`    | `SYSINFO_SOC_IO_UART0`   | set if primary UART0 is implemented (via top's `IO_UART0_EN` generic)
+| `18`    | `SYSINFO_SOC_IO_SPI`     | set if SPI is implemented (via top's `IO_SPI_EN` generic)
+| `19`    | `SYSINFO_SOC_IO_TWI`     | set if TWI is implemented (via top's `IO_TWI_EN` generic)
+| `20`    | `SYSINFO_SOC_IO_PWM`     | set if PWM is implemented (via top's `IO_PWM_NUM` generic)
+| `21`    | `SYSINFO_SOC_IO_WDT`     | set if WDT is implemented (via top's `IO_WDT_EN` generic)
+| `22`    | `SYSINFO_SOC_IO_CFS`     | set if custom functions subsystem is implemented (via top's `IO_CFS_EN` generic)
+| `23`    | `SYSINFO_SOC_IO_TRNG`    | set if TRNG is implemented (via top's `IO_TRNG_EN` generic)
+| `24`    | `SYSINFO_SOC_IO_SDI`     | set if SDI is implemented (via top's `IO_SDI_EN` generic)
+| `25`    | `SYSINFO_SOC_IO_UART1`   | set if secondary UART1 is implemented (via top's `IO_UART1_EN` generic)
+| `26`    | `SYSINFO_SOC_IO_NEOLED`  | set if smart LED interface is implemented (via top's `IO_NEOLED_EN` generic)
+| `27`    | `SYSINFO_SOC_IO_TRACER`  | set if execution tracer is implemented (via top's `IO_TRACER_EN` generic)
+| `28`    | `SYSINFO_SOC_IO_GPTMR`   | set if GPTMR is implemented (via top's `IO_GPTMR_NUM` generic)
+| `29`    | `SYSINFO_SOC_IO_SLINK`   | set if stream link interface is implemented (via top's `IO_SLINK_EN` generic)
+| `30`    | `SYSINFO_SOC_IO_ONEWIRE` | set if ONEWIRE interface is implemented (via top's `IO_ONEWIRE_EN` generic)
+| `31`    | `SYSINFO_SOC_SIM`        | set if NEORV32 is being simulated
+|=======================
+
+
+===== SYSINFO - Cache Configuration
+
+The SYSINFO cache register provides information about the configuration of the processor caches:
+
+* <<_instruction_cache_icache>>
+* <<_data_cache_dcache>>
+
+.SYSINFO `CACHE` Bits
+[cols="^1,<10,<10"]
+[options="header",grid="all"]
+|=======================
+| Bit     | Name [C] | Description
+| `3:0`   | `SYSINFO_CACHE_INST_BLOCK_SIZE_3 : SYSINFO_CACHE_INST_BLOCK_SIZE_0` | _log2_(i-cache block size in bytes), via top's `ICACHE_BLOCK_SIZE` generic
+| `7:4`   | `SYSINFO_CACHE_INST_NUM_BLOCKS_3 : SYSINFO_CACHE_INST_NUM_BLOCKS_0` | _log2_(i-cache number of cache blocks), via top's `ICACHE_NUM_BLOCKS` generic
+| `11:8`  | `SYSINFO_CACHE_DATA_BLOCK_SIZE_3 : SYSINFO_CACHE_DATA_BLOCK_SIZE_0` | _log2_(d-cache block size in bytes), via top's `DCACHE_BLOCK_SIZE` generic
+| `15:12` | `SYSINFO_CACHE_DATA_NUM_BLOCKS_3 : SYSINFO_CACHE_DATA_NUM_BLOCKS_0` | _log2_(d-cache number of cache blocks), via top's `DCACHE_NUM_BLOCKS` generic
+| `16`    | `SYSINFO_CACHE_INST_BURSTS_EN`                                      | i-cache burst transfers enabled, via top's `CACHE_BURSTS_EN` generic
+| `23:17` | `0000000`                                                           | _reserved_
+| `24`    | `SYSINFO_CACHE_DATA_BURSTS_EN`                                      | d-cache burst transfers enabled, via top's `CACHE_BURSTS_EN` generic
+| `31:25` | `0000000`                                                           | _reserved_
+|=======================

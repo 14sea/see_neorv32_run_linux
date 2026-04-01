@@ -192,7 +192,10 @@ def main():
         # ── Step 1: Program FPGA ──
         if not args.skip_program:
             rbf = args.rbf or os.path.join(base, "output", "neorv32_demo.rbf")
-            loader = "openFPGALoader"  # must be in PATH or specify full path
+            # Try built-from-source first, then pre-built binary
+            loader = os.path.join(base, "tools", "openFPGALoader", "build", "openFPGALoader")
+            if not os.path.exists(loader):
+                loader = os.path.join(base, "tools", "openFPGALoader")
             print(f"\n[1] Programming FPGA: {rbf}")
             import subprocess
             r = subprocess.run([loader, "-c", "usb-blaster", rbf],

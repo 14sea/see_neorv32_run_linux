@@ -1,0 +1,172 @@
+<<<
+:sectnums:
+=== NEORV32 Runtime Environment
+
+The NEORV32 software framework provides a minimal runtime environment ("RTE") that takes care of a stable
+and _safe_ execution environment by providing a unified interface for handling of _all_ traps (exceptions and
+interrupts). Once initialized, the RTE provides <<_default_rte_trap_handlers>> that catch all possible traps.
+These default handlers just output a message via UART when a certain trap has been triggered. The default
+handlers can be overridden by the application code to install application-specific handler functions for each trap.
+
+Using the RTE is **optional but highly recommended** for bare-metal / non-OS applications. The RTE provides a
+simple and comfortable way of delegating traps to application-specific handlers while making sure that all traps
+(even though they are not explicitly used by the application) are handled correctly. Performance-optimized
+applications or embedded operating systems may not use the RTE at all in order to increase response time.
+
+
+==== RTE Operation
+
+The RTE manages the trap-related CSRs of the CPU's privileged architecture (see <<_machine_trap_handling_csrs>>).
+It initializes the <<_mtvec>> CSR in DIRECT mode, which provides the base entry point for _all_ traps. The address
+stored to this register defines the address of the **first-level trap handler**, which is provided by the NEORV32
+RTE. Whenever an exception or interrupt is triggered this first-level trap handler is executed.
+
+The first-level handler performs a complete context save, analyzes the source of the trap and calls the according
+**second-level trap handler**, which takes care of the actual exception/interrupt handling. The RTE manages an
+internal look-up table to track the addresses of the according second-level trap handlers.
+
+After the initial RTE setup, each entry in the RTE's trap handler look-up table is initialized with a
+<<_default_rte_trap_handlers>>. These default handler do not execute any trap-related operations - they just output
+a debugging message via the primary UART (UART0) (if enabled) to inform the user that a trap has occurred that is
+not (yet) handled by a proper application-specific trap handler. After sending this message, the RTE tries to resume
+normal execution by moving on to the next linear instruction.
+
+.Dual-Core Configuration
+[NOTE]
+The RTE's internal trap handler look-up table is used globally for **both** cores. If a core-specific handling is
+required, the according user-defined trap handler need to retrieve the core's ID from <<_mhartid>> and branch
+accordingly.
+
+
+==== Using the RTE
+
+The NEORV32 runtime environment is part of the default NEORV32 software framework. The links to the according
+software references are listed below.
+
+[cols="<1,<8"]
+[grid="none"]
+|=======================
+| neorv32_rte.c | link:https://stnolting.github.io/neorv32/sw/neorv32__rte_8c.html[Online software reference (Doxygen)]
+| neorv32_rte.h | link:https://stnolting.github.io/neorv32/sw/neorv32__rte_8h.html[Online software reference (Doxygen)]
+|=======================
+
+The RTE has to be explicitly enabled by calling the according setup function. It is recommended to do this right at the
+beginning of the application's `main` function. For the SMP <<_dual_core_configuration>> the RTE setup functions has to
+be called on each core that wants to use the RTE.
+
+.RTE Setup Right at the Beginning of "main"
+[source,c]
+----
+int main() {
+
+  neorv32_rte_setup(); // setup NEORV32 runtime environment
+
+  ...
+----
+
+After setup, all traps will trigger execution of the RTE's <<_default_rte_trap_handlers>> at first. In order to use
+application-specific trap handlers the default debug handlers can be overridden by installing user-defined ones:
+
+.Installing an Application-Specific Trap Handler (Function Prototype)
+[source,c]
+----
+int neorv32_rte_handler_install(uint8_t id, void (*handler)(void));
+----
+
+The first argument `id` defines the "trap ID" (for example a certain interrupt request) that shall be handled by the
+user-defined handler. These IDs are defined in `sw/lib/include/neorv32_rte.h`. However, more convenient device-specific
+aliases are also defined in `sw/lib/include/neorv32.h`. The second argument `handler` is the actual function that
+implements the user-defined trap handler. The custom handler functions must have a specific type without any arguments
+and with no return value:
+
+.Custom Trap Handler (Function Prototype)
+[source,c]
+----
+void custom_trap_handler_xyz(void) {
+
+  // handle trap...
+}
+----
+
+.Custom Trap Handler Attributes
+[IMPORTANT]
+Do **NOT** use the `((interrupt))` attribute for the application trap handler functions! This would place an `mret`
+instruction at the end of the handler making it impossible to return to the first-level trap handler of the RTE core.
+
+.`mscratch` CSR
+[IMPORTANT]
+The <<_mscratch>> CSR should not be used inside an application trap handler as this register is used by the RTE to
+provide the base address of the application's stack frame <<_application_context_handling>> (i.e. modifying the
+registers of application code that caused a trap).
+
+The following example shows how to install trap handlers for exemplary traps.
+
+.Installing Custom Trap Handlers Examples
+[source,c]
+----
+neorv32_rte_handler_install(RTE_TRAP_MTI, machine_timer_irq_handler); // handler for machine timer interrupt
+neorv32_rte_handler_install(RTE_TRAP_MENV_CALL, environment_call_handler); // handler for machine environment call exception
+neorv32_rte_handler_install(SLINK_RX_RTE_ID, slink_rx_handler); // handler for SLINK receive interrupt
+----
+
+
+==== Default RTE Trap Handlers
+
+The default RTE trap handlers are executed when a certain trap is triggered that is not (yet) handled by an
+application-defined trap handler. The default handler will output a message giving additional debug information
+via the <<_primary_universal_asynchronous_receiver_and_transmitter_uart0>> to inform the user and it will also
+try to resume normal program execution (exemplary RTE outputs are shown below). The specific message right at
+the beginning of the debug trap handler message corresponds to the trap code obtained from the <<_mcause>> CSR
+(see <<_neorv32_trap_listing>>).
+
+In most cases the RTE can successfully continue operation - for example if it catches an **interrupt** request
+that is not handled by the actual application program. However, if the RTE catches an un-handled **trap** like
+a bus access fault exception, continuing execution will most likely fail making the CPU crash.
+
+.RTE Default Trap Handler UART0 Output Examples
+[source]
+----
+<NEORV32-RTE-PANIC> [cpu0|M] Illegal instruction MEPC=0x000002d6 MTINST=0x000000FF MTVAL=0x00000000 </NEORV32-RTE-PANIC> <1>
+<NEORV32-RTE-PANIC> [cpu0|U] Illegal instruction MEPC=0x00000302 MTINST=0x00000000 MTVAL=0x00000000 </NEORV32-RTE-PANIC> <2>
+<NEORV32-RTE-PANIC> [cpu0|U] Load address misaligned MEPC=0x00000440 MTINST=0x01052603 MTVAL=0x80000101 </NEORV32-RTE-PANIC> <3>
+<NEORV32-RTE-PANIC> [cpu1|M] FIRQ channel 0x00000003 MEPC=0x00000820 MTINST=0x00000000 MTVAL=0x00000000 </NEORV32-RTE-PANIC> <4>
+<NEORV32-RTE-PANIC> [cpu1|M] Instruction access fault MEPC=0x90000000 MTINST=0x42078b63 MTVAL=0x00000000 FATAL! HALTING CPU </NEORV32-RTE-PANIC>\n <5>
+----
+<1> Illegal 32-bit instruction `MTINST=0x000000FF` at address `MEPC=0x000002d6` while CPU 0 was in machine-mode (`[cpu0|M]`).
+<2> Illegal 16-bit instruction `MTINST=0x00000000` at address `MEPC=0x00000302` while CPU 0 was in user-mode (`[cpu0|U]`).
+<3> Misaligned load access at address `MEPC=0x00000440` caused by instruction `MTINST=0x01052603` (trying to load a full 32-bit word from address `MTVAL=0x80000101`) while CPU 0 was in user-mode (`[cpu0|U]`).
+<4> Fast interrupt request from channel 3 before executing instruction at address `MEPC=0x00000820` while CPU 1 was in machine-mode (`[cpu0|M]`).
+<5> Instruction bus access fault at address `MEPC=0x90000000` while executing instruction `MTINST=0x42078b63` while CPU 1 was in machine-mode (`[cpu0|M]`). This is a fatal/non-resumable exception halting the CPU.
+
+
+==== Application Context Handling
+
+Upon trap entry the RTE backups the entire application context (i.e. all `x` general purpose registers) to the
+stack. The context is restored automatically after trap completion. The base address of the according stack frame
+is copied to the <<_mscratch>> CSR. By having this information available, the RTE provides dedicated functions
+for accessing and altering the application context:
+
+.RTE Context Access Functions
+[source,c]
+----
+// Prototypes
+uint32_t neorv32_rte_context_get(int x); // read register
+void     neorv32_rte_context_put(int x, uint32_t data); // write data to register
+
+// Examples
+uint32_t tmp = neorv32_rte_context_get(9); // read register 'x9'
+neorv32_rte_context_put(28, tmp); // write 'tmp' to register 'x28'
+----
+
+The `x` argument is used to specify one of the RISC-V general purpose register `x0` to `x31`. Note that registers
+`x16` to `x31` are not available if the RISC-V <<_e_isa_extension>> is enabled. For he SMP <<_dual_core_configuration>>
+the provided context functions will access the stack frame of the interrupted application code that was running
+on the specific CPU core that caused the trap entry.
+
+The context access functions can be used by application-specific trap handlers to _emulate_ unsupported
+CPU / SoC features like unimplemented IO modules, unsupported instructions and even unaligned memory accesses.
+
+.Demo Program: Emulate Unaligned Memory Access
+[TIP]
+A demo program, which showcases how to emulate unaligned memory accesses using the NEORV32 runtime environment
+can be found in `sw/example/demo_emulate_unaligned`.

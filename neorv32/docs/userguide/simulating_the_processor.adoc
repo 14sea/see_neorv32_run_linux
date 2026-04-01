@@ -1,0 +1,155 @@
+<<<
+:sectnums:
+== Simulating the Processor
+
+Due to the complexity of the NEORV32 processor and all the different configuration options,
+there is a wide range of possible testing and verification strategies.
+
+On the one hand, a simple smoke testbench allows ensuring that functionality is correct from a software point of view.
+That is used for running the RISC-V architecture tests, in order to guarantee compliance with the ISA specification(s).
+All required simulation sources are located in `sim`.
+
+On the other hand, http://vunit.github.io/[VUnit] and http://vunit.github.io/verification_components/user_guide.html[Verification Components]
+are used for verifying the functionality of the various peripherals from a hardware point of view.
+
+.AMD Vivado / ISIM - Incremental Compilation
+[IMPORTANT]
+When using AMD Vivado (ISIM for simulation) make sure to **TURN OFF** "incremental compilation" (_Project Settings_
+-> _Simulation_ -> _Advanced_ -> _Enable incremental compilation). This will slow down simulation relaunch but will
+ensure that all application images (`*_image.vhd`) are reanalyzed when recompiling the NEORV32 application or bootloader.
+
+:sectnums:
+=== Testbench
+
+.VUnit Testbench
+[TIP]
+A more sophisticated testbench using **VUnit** is available in a separate repository:
+https://github.com/stnolting/neorv32-vunit
+
+A plain-VHDL testbench without any third-party libraries / dependencies (`sim/neorv32_tb.vhd`) can be used for simulating
+and testing the processor and all its configurations. This testbench features clock and reset generators and enables all
+optional peripheral and CPU extensions. The processor check program (`sw/example/processor_check`) is develop in close
+relation to the default testbench in order to test all primary processor functions.
+
+The simulation setup is configured via the "User Configuration" section located right at the beginning of
+the testbench architecture. Each configuration generic provides a default value and a comments to explain the functionality.
+Basically, these configuration generics represent most of the processor's **top generics**.
+
+.UART output during simulation
+[IMPORTANT]
+Data written to the NEORV32 UART0 / UART1 transmitter is send to a virtual UART receiver implemented as part of the default
+testbench. The received chars are send to the simulator console and are also stored to a log file (`tb.uart0_rx.log`
+for UART0, `tb.uart1_rx.log` for UART1) inside the simulator's home folder. **Please note that printing via the
+native UART receiver takes a lot of time.** For faster simulation console output see section <<_faster_simulation_console_output>>.
+
+
+:sectnums:
+=== Faster Simulation Console Output
+
+When printing data via the physical UART the communication speed will always be based on the configured BAUD rate. For a
+simulation this might take some time. To have faster output you can enable the **simulation mode** for UART0/UART1 (see
+section https://stnolting.github.io/neorv32/#_primary_universal_asynchronous_receiver_and_transmitter_uart0).
+TX data sent to UART0 / UART1 will be immediately printed to the simulator console instead of being transmitted via the
+physical UART TX line.
+
+.Automatic Simulation Mode
+[TIP]
+You can "automatically" enable the simulation mode of UART0/UART1 when compiling an application. In this case, the "real"
+UART0/UART1 transmitter unit is permanently disabled by setting the UART's "sim-mode" bit.
+To enable the simulation mode just compile and install the application and add `-DUART0_SIM_MODE` `-DUART0_SIM_MODE` /
+`-DUART1_SIM_MODE` to the compiler's `USER_FLAGS` variable (do not forget the `-D` suffix flag):
+
+.Auto-Enable UART0 Simulation-Mode while Compiling
+[source, bash]
+----
+sw/example/demo_blink_led$ make USER_FLAGS+=-DUART0_SIM_MODE clean_all all
+----
+
+
+:sectnums:
+=== GHDL Simulation
+
+The default simulation setup that is also used by the project's CI pipeline is based on the free and open-source VHDL
+simulator **GHDL**. The `sim` folder also contains a simple script that evaluates and simulates all core files.
+This script can be called right from the command. Optionally, additional GHDL flags can be passes.
+
+.Invoking the default GHDL simulation script
+[source, bash]
+----
+neorv32/sim$ sh ghdl.sh --stop-time=20ms
+----
+
+
+:sectnums:
+=== Simulation using Application Makefiles
+
+The <<_ghdl_simulation>> can also be started by the main application makefile (i.e. from each SW project folder).
+
+.Starting the GHDL simulation from the application makefile
+[source, bash]
+----
+sw/example/demo_blink_led$ make USER_FLAGS+=-DUART0_SIM_MODE clean_all install sim
+[...]
+Blinking LED demo program
+----
+
+Makefile targets:
+
+* `clean_all`: delete all artifacts and rebuild everything
+* `install`: install executable
+* `sim`: run GHDL simulation
+
+.Adjusting the Testbench Configuration
+[TIP]
+The testbench provides several generics for customization. These can be adjusted in-console using the
+makefile's `GHDL_RUN_FLAGS` variable. E.g.: `make GHDL_RUN_FLAGS+="-gBOOT_MODE_SELECT=1" sim`
+
+
+:sectnums:
+==== Hello World!
+
+To do a quick test of the NEORV32 make and the required tools navigate to the project's `sw/example/hello_world`
+folder and run `make USER_FLAGS+=-DUART0_SIM_MODE clean install sim`:
+
+[source, bash]
+----
+neorv32/sw/example/hello_world$ make USER_FLAGS+=-DUART0_SIM_MODE clean install sim
+../../../sw/lib/source/neorv32_uart.c: In function 'neorv32_uart_setup':
+../../../sw/lib/source/neorv32_uart.c:80:2: warning: #warning UART0_SIM_MODE (primary UART) enabled! Sending all UART0.TX data to text.io simulation output instead of real UART0 transmitter. Use this for simulation only! [-Wcpp] <1>
+   80 | #warning UART0_SIM_MODE (primary UART) enabled! \
+      |  ^~~~~~~
+Memory utilization:
+   text    data     bss     dec     hex filename
+   5596       0     116    5712    1650 main.elf <2>
+Compiling image generator...
+Generating neorv32_imem_image.vhd
+Installing application image to ../../../rtl/core/neorv32_imem_image.vhd <3>
+Simulating processor using default testbench...
+GHDL simulation run parameters: --stop-time=10ms <4>
+../rtl/core/neorv32_top.vhd:329:5:@0ms:(assertion note): [NEORV32] The NEORV32 RISC-V Processor (v1.11.6.0), github.com/stnolting/neorv32
+../rtl/core/neorv32_top.vhd:335:5:@0ms:(assertion note): [NEORV32] Processor Configuration: CPU (smp-dual-core) IMEM-ROM DMEM I-CACHE D-CACHE XBUS CLINT GPIO UART0 UART1 SPI SDI TWI TWD PWM WDT TRNG CFS NEOLED GPTMR ONEWIRE DMA SLINK SYSINFO OCD OCD-AUTH OCD-HWBP
+../rtl/core/neorv32_top.vhd:388:5:@0ms:(assertion note): [NEORV32] BOOT_MODE_SELECT = 2: booting IMEM image
+../rtl/core/neorv32_cpu.vhd:130:5:@0ms:(assertion note): [NEORV32] CPU ISA: rv32iabmux_zaamo_zalrsc_zba_zbb_zbkb_zbkc_zbkx_zbs_zicntr_zicond_zicsr_zifencei_zihpm_zfinx_zkn_zknd_zkne_zknh_zks_zksed_zksh_zkt_zmmul_sdext_sdtrig_smpmp_xcfu
+../rtl/core/neorv32_cpu.vhd:168:5:@0ms:(assertion note): [NEORV32] CPU tuning options: fast_mul fast_shift
+../rtl/core/neorv32_cpu.vhd:175:5:@0ms:(assertion warning): [NEORV32] Assuming this is a simulation.
+../rtl/core/neorv32_imem.vhd:61:3:@0ms:(assertion note): [NEORV32] Implementing processor-internal IMEM as pre-initialized ROM.
+../rtl/core/neorv32_trng.vhd:298:3:@0ms:(assertion note): [neoTRNG] The neoTRNG (v3.3) - A Tiny and Platform-Independent True Random Number Generator, https://github.com/stnolting/neoTRNG
+../rtl/core/neorv32_trng.vhd:308:3:@0ms:(assertion warning): [neoTRNG] Simulation-mode enabled (NO TRUE/PHYSICAL RANDOM)!
+../rtl/core/neorv32_debug_auth.vhd:44:3:@0ms:(assertion warning): [NEORV32] using DEFAULT on-chip debugger authenticator. Replace by custom module.
+<5>
+                                                                                      ##        ##   ##   ##
+ ##     ##   #########   ########    ########   ##      ##   ########    ########     ##      ################
+####    ##  ##          ##      ##  ##      ##  ##      ##  ##      ##  ##      ##    ##    ####            ####
+## ##   ##  ##          ##      ##  ##      ##  ##      ##          ##         ##     ##      ##   ######   ##
+##  ##  ##  #########   ##      ##  #########   ##      ##      #####        ##       ##    ####   ######   ####
+##   ## ##  ##          ##      ##  ##     ##    ##    ##           ##     ##         ##      ##   ######   ##
+##    ####  ##          ##      ##  ##      ##    ##  ##    ##      ##   ##           ##    ####            ####
+##     ##    #########   ########   ##       ##     ##       ########   ##########    ##      ################
+                                                                                      ##        ##   ##   ##
+Hello world! :)
+----
+<1> Notifier that "simulation mode" of UART0 is enabled (by the `USER_FLAGS+=-DUART0_SIM_MODE` makefile flag). All UART0 output is send to the simulator console.
+<2> Final executable size (`text`) and _static_ data memory requirements (`data`, `bss`).
+<3> The application code is _installed_ as pre-initialized IMEM. This is the default approach for simulation.
+<4> List of (default) arguments that were send to the simulator. Here: maximum simulation time (10ms).
+<5> Execution of the actual program starts. UART0 TX data is printed right to the console.

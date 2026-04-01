@@ -1,0 +1,217 @@
+name: Test
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+
+  doc:
+    if: github.event_name != 'pull_request' && (github.ref == 'refs/heads/master' || startsWith(github.ref, 'refs/tags/'))
+    runs-on: ubuntu-latest
+    name: '📓 Docs'
+
+    steps:
+      - name: '🧰 Checkout'
+        uses: actions/checkout@v4
+
+      - name: '🐍 Setup Python'
+        uses: actions/setup-python@v4
+        with:
+          python-version: "3.x"
+
+      - name: '📦 Install dependencies'
+        run: |
+          pip install sphinx PyYAML tabulate
+
+      - name: '📓 Build docs'
+        run: |
+          sphinx-build -b html doc doc/_build/html
+
+      - name: '⬆️ Deploy to gh-pages'
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: doc/_build/html
+          publish_branch: gh-pages
+          keep_files: false
+
+      - name: 'Upload docs artifact'
+        uses: actions/upload-artifact@v4
+        with:
+          name: openFPGALoader-Documentation
+          path: doc/_build/html
+
+
+  lin-build:
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+        - 22
+        - 24
+    name: '🚧🐧 Ubuntu ${{ matrix.os }} | build'
+    runs-on: ubuntu-${{ matrix.os }}.04
+    steps:
+
+    - name: '🧰 Checkout'
+      uses: actions/checkout@v4
+
+    - name: '⚙️ Install dependencies'
+      run: |
+        sudo apt update -qq
+        sudo apt install -y \
+          cmake \
+          gzip \
+          libftdi1-2 \
+          libftdi1-dev \
+          libhidapi-libusb0 \
+          libhidapi-dev \
+          libudev-dev \
+          pkg-config \
+          tree \
+          zlib1g-dev
+
+    - name: '🚧 Build tarball'
+      run: |
+        mkdir build
+        cd build
+        cmake ..
+        cmake --build .
+
+        make DESTDIR=$(pwd)/dist install
+        _rulesdir='dist/etc/udev/rules.d/'
+        mkdir -p "${_rulesdir}"
+        cp ../99-openfpgaloader.rules "${_rulesdir}"
+        _licenses="dist/usr/local/share/licenses/openFPGALoader"
+        mkdir -p "${_licenses}"
+        install -m 644 ../LICENSE "${_licenses}"
+
+        tar -cvzf ../ubtuntu${{ matrix.os }}.04-openFPGALoader.tgz -C dist .
+
+    - name: '📤 Upload artifact: tarball'
+      uses: actions/upload-artifact@v4
+      with:
+        name: ubtuntu${{ matrix.os }}.04-openFPGALoader
+        path: ubtuntu${{ matrix.os }}.04-openFPGALoader.tgz
+
+    - name: '🔍 Show package content'
+      run: |
+        mkdir tmp
+        cd tmp
+        tar -xf ../ubtuntu${{ matrix.os }}.04-openFPGALoader.tgz
+        tree .
+
+
+  mac-build:
+    strategy:
+      fail-fast: false
+    name: '🚧🐧 macOS latest | build'
+    runs-on: macos-latest
+    steps:
+
+    - name: '🧰 Checkout'
+      uses: actions/checkout@v4
+
+    - name: '⚙️ Install dependencies'
+      run: |
+        #brew update
+        brew install --only-dependencies openFPGALoader
+
+    - name: '🚧 Build tarball'
+      run: |
+        mkdir build
+        cd build
+        cmake ..
+        cmake --build .
+
+
+  lin-test:
+    needs: lin-build
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+        - 22
+        - 24
+    name: '🚦🐧 Ubuntu ${{ matrix.os }} | test'
+    runs-on: ubuntu-${{ matrix.os }}.04
+    steps:
+
+    - name: '⚙️ Install dependencies'
+      run: |
+        sudo apt update -qq
+        sudo apt install -y \
+          libftdi1-2 \
+          libhidapi-libusb0 \
+          udev \
+          zlib1g
+
+    - name: '📥 Download artifact: package'
+      uses: actions/download-artifact@v4.1.7
+      with:
+        name: ubtuntu${{ matrix.os }}.04-openFPGALoader
+
+    - name: '🛠️ Install package'
+      run: sudo tar -xvzf *.tgz -C /
+
+    - name: '🚦 Test package'
+      run: |
+        openFPGALoader --help
+        openFPGALoader --detect || true
+
+
+  win-jobs:
+    name: ⬜ Generate list of MSYS2 jobs
+    runs-on: ubuntu-latest
+    outputs:
+      jobs: ${{ steps.matrix.outputs.jobs }}
+    steps:
+    - id: matrix
+      uses: msys2/setup-msys2/matrix@a5d2c5a565c520efa5f477391e4e3f87c2e08f46
+      with:
+        systems: >-
+          mingw64
+          ucrt64
+          clang64
+
+  win:
+    needs: win-jobs
+    uses: msys2/setup-msys2/.github/workflows/PKGBUILD.yml@a5d2c5a565c520efa5f477391e4e3f87c2e08f46
+    with:
+      name: openFPGALoader
+      matrix: ${{ needs.win-jobs.outputs.jobs }}
+      path: scripts/msys2
+      test: |
+        uname -a
+        which openFPGALoader
+        openFPGALoader --help
+        openFPGALoader --detect || true
+
+
+  Release:
+    if: github.event_name != 'pull_request' && (github.ref == 'refs/heads/master' || contains(github.ref, 'refs/tags/'))
+    needs: [ doc, lin-test, win ]
+    runs-on: ubuntu-latest
+    name: '📦 Release'
+    steps:
+
+    - name: '📥 Download artifacts'
+      uses: actions/download-artifact@v4.1.7
+      with:
+        path: artifact
+
+    - name: '✉️ Package Documentation'
+      run: |
+        cd artifact
+        tar cvzf openFPGALoader-Documentation.tar.gz openFPGALoader-Documentation
+        rm -rf openFPGALoader-Documentation
+
+    # Tagged: create a pre-release or a release (semver)
+    # Untagged: update the assets of pre-release 'nightly'
+    - uses: pyTooling/Actions/releaser@r0
+      with:
+        token: ${{ github.token }}
+        tag: 'nightly'
+        files: artifact/**/*

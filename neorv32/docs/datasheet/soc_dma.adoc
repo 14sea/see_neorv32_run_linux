@@ -1,0 +1,143 @@
+<<<
+:sectnums:
+==== Direct Memory Access Controller (DMA)
+
+[cols="<3,<3,<4"]
+[grid="none"]
+|=======================
+| Hardware source files:  | neorv32_dma.vhd     |
+| Software driver files:  | neorv32_dma.c       | link:https://stnolting.github.io/neorv32/sw/neorv32__dma_8c.html[Online software reference (Doxygen)]
+|                         | neorv32_dma.h       | link:https://stnolting.github.io/neorv32/sw/neorv32__dma_8h.html[Online software reference (Doxygen)]
+| Top entity ports:       | none                |
+| Configuration generics: | `IO_DMA_EN`         | implement DMA when `true`
+|                         | `IO_DMA_DSC_FIFO`   | descriptor FIFO depth, has to be a power of 2, min 4, max 512
+| CPU interrupts:         | fast IRQ channel 10 | DMA transfer(s) done (see <<_processor_interrupts>>)
+|=======================
+
+**Key Features**
+
+* CPU-independent data movement
+* Byte-wide or word-wide data transfers
+* Up to 16MB (bytes) or 64MB (words) per transfer
+* Optional Endianness conversion
+* Optional descriptor FIFO
+* Chaining of pre-programmed transfers
+* Transfer-done interrupt
+
+
+**Overview**
+
+The NEORV32 DMA features a lightweight direct memory access controller that allows to move and modify data independently
+of the CPU. Only a single read/write channel is implemented. So only one programmed transfer can be in progress at a time.
+However, a configurable descriptor FIFO is provided which allows to program several transfers so the DMA can execute them
+one after the other.
+
+The DMA is connected to the central processor-internal bus system (see section <<_address_space>>) and can access the
+entire/same address space as the CPU core. It uses _interleaving mode_ accessing the central processor bus only if the CPU
+does not currently request a bus access. The DMA controller can handle different data quantities (e.g. read bytes and write
+them back as zero-extended words) and can also change the Endianness of data while transferring. It supports reading/writing
+data from/to fixed or auto-incrementing addresses.
+
+.DMA Bus Access
+[NOTE]
+Transactions performed by the DMA are executed as bus transactions with elevated **machine-mode** privilege level.
+Note that any physical memory protection rules (<<_smpmp_isa_extension>>) are not applied to DMA transfers.
+Furthermore, the DMA uses single-transfers only (.e. no burst transfers).
+
+.DMA Demo Program
+[TIP]
+A DMA example program can be found in `sw/example/demo_dma`.
+
+
+**Theory of Operation**
+
+The DMA provides just two memory-mapped interface registers: A status and control register `CTRL` and
+another one for writing the transfer descriptor(s) to the internal descriptor FIFO.
+
+The DMA is enabled by setting the `DMA_CTRL_EN` bit of the control register. Clearing this flag will abort any outstanding
+transfer and will also reset/clear the descriptor FIFO. A programmed DMA transfer is initiated by setting the control
+register's `DMA_CTRL_START` bit. Setting this bit while the descriptor FIFO is empty has no effect. The current status
+of the FIFO can be checked via the `DMA_CTRL_D*` flags.
+
+The DMA uses an atomic read-modify-write transfer process. Data is read from the current source address, modified/aligned
+internally and then written back to the current destination address. If the DMA controller encounters a bus error during
+operation, it will set the `DMA_CTRL_ERROR` flag and will terminate the current transfer. An new transfer can only start
+if the `DMA_CTRL_ERROR` flag is cleared manually.
+
+When the `DMA_CTRL_DONE` flag is set the DMA has completed all programmed transfers, i.e. all descriptors from the FIFO
+were executed. This flag also triggers the DMA controller's interrupt request signal. The application software has to
+clear `DMA_CTRL_DONE` in order to acknowledge the interrupt and to start further transfers.
+
+
+**DMA Descriptor**
+
+All DMA transfers are executed based on _descriptors_. A descriptor contains the data source and destination base addresses
+as well as the number of elements to transfer and the data type and handling configuration. A complete descriptor is
+encoded as 3 consecutive 32-bit words:
+
+.DMA Descriptor
+[cols="<1,<2,<7"]
+[options="header",grid="all"]
+|=======================
+| Index | Size | Description
+| 0 | 32-bit | Source data base address
+| 1 | 32-bit | Destination data base address
+| 2 | 32-bit | Transfer configuration word (see next table)
+|=======================
+
+.Descriptor FIFO Size
+[NOTE]
+The descriptor FIFO has a minimal size of 4 entries. This can be extended by the `IO_DMA_DSC_FIFO` generic.
+
+.Incomplete Descriptors
+[NOTE]
+The DMA controller consumes 3 entries from the FIFO for each transfer. If the FIFO does not provide a complete
+DMA descriptor, the controller will wait until a complete descriptor is available.
+
+The source and destination data addresses can target any memory location in the entire 32-bit address space including
+memory-mapped peripherals. The number of elements to transfer as well as incrementing or constant byte- or word-level
+transfers are configured via the transfer configuration word (3rd descriptor word):
+
+.DMA Descriptor - Transfer Configuration Word
+[cols="<1,<2,<6"]
+[options="header",grid="all"]
+|=======================
+| Bit(s) | Name | Description
+| `23:0`  | `DMA_CONF_NUM`   | Number of elements to transfer; must be greater than zero
+| `26:24` | -                | _reserved_, set to zero
+| `27`    | `DMA_CONF_BSWAP` | Set to swap byte order ("Endianness" conversion)
+| `29:28` | `DMA_CONF_SRC`   | Source data configuration (see list below)
+| `31:30` | `DMA_CONF_DST`   | Destination data configuration (see list below)
+|=======================
+
+Source and destination data accesses are configured by a 2-bit selector individually for the source and the destination data:
+
+* `00`: Constant byte - transfer data as byte (8-bit); do not alter address during transfer
+* `01`: Constant word - transfer data as word (32-bit); do not alter address during transfer
+* `10`: Incrementing byte - transfer data as byte (8-bit); increment the source address by 1
+* `11`: Incrementing word - transfer data as word (32-bit); increment the source address by 4
+
+Optionally, the controller can automatically swap the logical byte order ("Endianness") of the transferred data
+when the `DMA_CONF_BSWAP` bit is set.
+
+
+**Register Map**
+
+.DMA Register Map (`struct NEORV32_DMA`)
+[cols="<2,<1,<4,^1,<7"]
+[options="header",grid="all"]
+|=======================
+| Address | Name [C] | Bit(s), Name [C] | R/W | Function
+.11+<| `0xffed0000` .11+<| `CTRL` <|`0`     `DMA_CTRL_EN`                             ^| r/w <| DMA module enable; reset module when cleared
+                                  <|`1`     `DMA_CTRL_START`                          ^| -/w <| Start programmed DMA transfer(s)
+                                  <|`15:2`  _reserved_                                ^| r/- <| _reserved_, read as zero
+                                  <|`19:16` `DMA_CTRL_DFIFO_MSB : DMA_CTRL_DFIFO_LSB` ^| r/- <| Descriptor FIFO depth, log2(`IO_DMA_DSC_FIFO`)
+                                  <|`26:20` _reserved_                                ^| r/- <| _reserved_, read as zero
+                                  <|`27`    `DMA_CTRL_ACK`                            ^| -/w <| Write `1` to clear DMA interrupt (also clears `DMA_CTRL_ERROR` and `DMA_CTRL_DONE`)
+                                  <|`27`    `DMA_CTRL_DEMPTY`                         ^| r/- <| Descriptor FIFO is empty
+                                  <|`28`    `DMA_CTRL_DFULL`                          ^| r/- <| Descriptor FIFO is full
+                                  <|`29`    `DMA_CTRL_ERROR`                          ^| r/- <| Bus access error during transfer or incomplete descriptor data
+                                  <|`30`    `DMA_CTRL_DONE`                           ^| r/1 <| All transfers executed
+                                  <|`31`    `DMA_CTRL_BUSY`                           ^| r/- <| DMA transfer(s) in progress
+| `0xffed0004` | `DESC` |`31:0` | -/w | Descriptor FIFO write access
+|=======================

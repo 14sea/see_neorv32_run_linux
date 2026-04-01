@@ -1,0 +1,17 @@
+= The NEORV32 RISC-V Processor - User Guide
+include::../attrs.adoc[]
+
+
+<<<
+// ####################################################################################################################
+.**Documentation**
+[TIP]
+The online documentation of the project (the **data sheet**) is available on GitHub-pages: https://stnolting.github.io/neorv32/
+The online documentation of the **software framework** is also available on GitHub-pages: https://stnolting.github.io/neorv32/sw/files.html
+
+
+<<<
+// ####################################################################################################################
+toc::[]
+
+include::content.adoc[]

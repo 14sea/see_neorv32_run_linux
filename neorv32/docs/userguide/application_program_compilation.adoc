@@ -1,0 +1,44 @@
+<<<
+:sectnums:
+== Application Program Compilation
+
+This guide shows how to compile a C-code application for the NEORV32 processor.
+
+[start=1]
+. Open a terminal console and navigate to one of the project's example programs. For instance, navigate to the
+simple `sw/example_demo_blink_led` example program. This program uses the GPIO controller to display
+an 8-bit counter on the lowest eight bit of the `gpio_o` output port.
+. To compile the project and generate an executable simply execute:
+
+[source,bash]
+----
+neorv32/sw/example/demo_blink_led$ make clean_all exe
+----
+
+[start=3]
+. The `clean` target is used to ensure everything is re-build.
+. The `exe` target will compile and link the application sources together with all the included libraries.
+At the end an ELF file (`main.elf`) is generated. The _NEORV32 image generator_ (in `sw/image_gen`)
+takes this file and creates the final executable (`neorv32_exe.bin`). The makefile will show the resulting
+memory utilization and the executable size:
+
+[source,bash]
+----
+neorv32/sw/example/demo_blink_led$ make clean_all exe
+Memory utilization:
+   text    data     bss     dec     hex filename
+   1004       0       0    1004     3ec main.elf
+Compiling ../../../sw/image_gen/image_gen
+Executable (neorv32_exe.bin) size in bytes:
+1016
+----
+
+.Build Artifacts
+[NOTE]
+All _intermediate_ build artifacts (like object files and binaries) will be places into a (new) project-local
+folder named `build`. The main ELF and the actual executable will be placed in the root project folder.
+
+[start=5]
+. The `exe` target has created the actual executable `neorv32_exe.bin` in the current folder
+that is ready to be uploaded to the processor using the build-in bootloader. Additionally, the `main.elf` file can
+be uploaded using the on-chip debugger.

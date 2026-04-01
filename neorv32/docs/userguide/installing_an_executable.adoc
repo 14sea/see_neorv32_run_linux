@@ -1,0 +1,37 @@
+<<<
+:sectnums:
+== Installing an Executable Directly Into Memory
+
+An application can be installed as non-volatile image to the internal instruction memory (IMEM) so that it
+gets executed right after reset. For this concept the IMEM gets implemented as pre-initialized ROM that
+gets initialized during FPGA bitstream programming.
+
+[start=1]
+. Configure the processor boot mode `BOOT_MODE_SELECT` to "Boot IMEM Image" (select value 2). This boot mode requires the processor-internal
+instruction memory (IMEM) so ensure is is enabled (`IMEM_EN`).
+
+.Processor top entity configuration - enable internal IMEM
+[source,vhdl]
+----
+BOOT_MODE_SELECT => 2,    -- boot from pre-initialized IMEM-ROM
+IMEM_EN          => true, -- implement processor-internal instruction memory
+----
+
+[start=2]
+. Regenerate and re-install the default IMEM initialization file (`rtl/core/neorv32_imem_image.vhd`)
+so that it contains the image of your actual application firmware.
+
+[source,bash]
+----
+neorv32/sw/example/demo_blink_led$ make clean_all image install
+Memory utilization:
+   text    data     bss     dec     hex filename
+  22192    1352    4216   27760    6c70 main.elf
+Compiling image generator...
+Generating neorv32_imem_image.vhd
+Installing application image to ../../../rtl/core/neorv32_imem_image.vhd
+----
+
+[start=3]
+. Rerun FPGA synthesis and upload the bitstream.
+Your application code now resides non-volatile in the processor's IMEM and is executed right after reset.

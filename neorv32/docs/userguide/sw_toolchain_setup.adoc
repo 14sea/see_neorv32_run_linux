@@ -1,0 +1,81 @@
+<<<
+:sectnums:
+== Software Toolchain Setup
+
+To compile (and debug) executables for the NEORV32 a RISC-V-compatible toolchain is required.
+By default, the project's software framework uses the GNU C Compiler RISC-V port "RISC-V GCC".
+Basically, there are two options to obtain such a toolchain:
+
+1. Download and _build_ the RISC-V GNU toolchain by yourself.
+2. Download and _install_ a **prebuilt** version of the toolchain.
+
+.Default GCC Prefix
+[NOTE]
+The default toolchain prefix for this project is `riscv-none-elf-`.
+This default prefix can be chanced by the `RISCV_PREFIX` variable in the NEORV32 application makefile(s).
+
+
+**Toolchain Requirements**
+
+[start=1]
+.The toolchain must be able to emit code for a 32-bit architecture (i.e. `mabi=rv32`).
+.An _embedded_ C standard library should be used (for example "Newlib").
+
+.Library/ISA Considerations
+[IMPORTANT]
+Note that a toolchain build with `--with-arch=rv32imc` provides library code (like the C standard library)
+compiled entirely using compressed (`C`) and `mul`/`div` instructions (`M`). Hence, this pre-compiled library
+code CANNOT be executed (without emulation) on an architecture that does not support these ISA extensions.
+
+
+**Building the Toolchain from Scratch**
+
+The official RISC-V GCC GitHub repository (https://github.com/riscv-collab/riscv-gnu-toolchain) provides instructions
+for building the toolchain from scratch:
+
+.Preparing GCC build for `rv32i` (minimal ISA only in this example)
+[source,bash]
+----
+$ git clone https://github.com/riscv/riscv-gnu-toolchain
+$ cd riscv-gnu-toolchain
+$ riscv-gnu-toolchain$ ./configure --prefix=/opt/riscv --with-arch=rv32i --with-abi=ilp32
+$ riscv-gnu-toolchain$ make
+----
+
+Note that this configuration will build a GCC toolchain with `riscv32-unknown-elf-` as prefix / GCC triplet.
+Hence, you need to adjust the `RISCV_PREFIX` variable accordingly before running any NEORV32 makefiles.
+
+
+**Downloading and Installing a Prebuilt Toolchain**
+
+Alternatively, a prebuilt toolchain can be used. Some OS package managers provide embedded RISC-V GCC toolchain.
+However, I can highly recommend the toolchain provided by the X-Pack project (MIT license):
+https://github.com/xpack-dev-tools/riscv-none-elf-gcc-xpack
+
+
+**Toolchain Installation**
+
+To integrate the toolchain of choice into the NEORV32 software framework, the toolchain's binaries need
+to be added to the system path (e.g. `PATH` environment variable) so they can be used by a shell. Therefore,
+the absolute path to the toolchain's `bin` folder has to be appended to the `PATH` variable:
+
+[source,bash]
+----
+$ export PATH=$PATH:/opt/riscv/bin
+----
+
+.bashrc
+[TIP]
+This command can be added to `.bashrc` (or similar) to automatically add the RISC-V
+toolchain at every console start.
+
+To make sure everything works fine, navigate to an example project in the NEORV32 `sw/example` folder and
+execute the following command:
+
+[source,bash]
+----
+neorv32/sw/example/demo_blink_led$ make check
+----
+
+This will test all the tools required for generating NEORV32 executables.
+Everything is working fine if "Toolchain check OK" appears at the end of the log output.

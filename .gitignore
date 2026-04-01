@@ -2,6 +2,11 @@
 quartus/db/
 quartus/incremental_db/
 quartus/output_files/
+quartus/*.rpt
+quartus/*.summary
+quartus/*.smsg
+quartus/*.done
+quartus/*.sof
 *.jdi
 *.pin
 *.sld
@@ -9,15 +14,34 @@ quartus/output_files/
 # Build artifacts
 sw/stage2_loader/build/
 sw/stage2_loader/*.elf
+sw/stage2_loader/*.bin
+sw/initramfs/init
+sw/initramfs/gen_init_cpio
+sw/initramfs/filelist.txt
 *.o
 *.d
+
+# Build outputs (kept via .gitkeep)
+output/*.rbf
+output/*.bin
+output/*.dtb
+output/Image
+output/*.cpio.gz
+
+# Extracted kernel source
+linux-6.6.83/
+
+# Linux kernel tarball (135 MB, too large for GitHub)
+linux-6.6.83.tar.xz
+
+# openFPGALoader build directory
+tools/openFPGALoader/build/
 
 # Python
 __pycache__/
 *.pyc
+.env/
 
 # VCD waveforms
 *.vcd
 
-# NEORV32 upstream (clone separately)
-neorv32/

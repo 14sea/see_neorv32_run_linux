@@ -4,6 +4,24 @@ Booting nommu Linux (kernel 6.6.83) on a **NEORV32** RV32IMC soft-core FPGA — 
 
 The NEORV32 is a microcontroller-class processor with **no MMU**, **no S-mode**, and **no atomic instructions**. Getting Linux to run on it required 22 patches across the kernel's arch/riscv, scheduler, RCU, init, and driver subsystems.
 
+## Documentation
+
+This repository includes three types of documentation, each for a different audience:
+
+| File | Audience | Purpose |
+|------|----------|---------|
+| `README.md` / `README_zh.md` | **Humans** | Project overview, build steps, architecture explanation |
+| `CLAUDE.md` | **AI agents** | Machine-readable build flow, constraints, and known pitfalls for [Claude Code](https://claude.ai/code) |
+| `init_prompt.txt` | **Claude Code bootstrap** | Paste this into Claude Code to have it build the entire project from source automatically |
+| `implementation_plan_en.md` / `implementation_plan_zh.md` | **Developers** | Detailed implementation plan from scratch, covering hardware verification, kernel porting, driver development, and all phases |
+| `BUILD_LOG.md` | **Developers** | Chronicle of 105 builds from "kernel compiled" to "shell prompt" — what broke, why, and how it was fixed |
+
+To reproduce the full build with Claude Code, open a terminal in the repo root and run:
+```bash
+claude
+```
+Then paste the contents of `init_prompt.txt` as your first message. Claude Code will read `CLAUDE.md` for detailed instructions and execute the complete build-from-source flow.
+
 ## Hardware
 
 | Component | Spec |
@@ -51,22 +69,129 @@ Free RAM:  30548 KB
 Processes: 13
 ```
 
-## Quick Start (pre-built binaries)
+## Build from Source
 
-Everything needed to boot is in `output/`. No compilation required.
+All source code is included in this repository. No external downloads needed.
+
+### Prerequisites
+
+| Tool | Purpose |
+|------|---------|
+| Intel Quartus Prime Lite 21.1+ | FPGA synthesis |
+| xPack RISC-V GCC 14.2.0 (riscv-none-elf-) | Kernel & stage2 cross-compiler (**required version**) |
+| Buildroot Linux GCC (riscv32-buildroot-linux-gnu-) | Initramfs /init only (needs PIE support) |
+| CMake + libftdi1-dev + libusb-1.0-0-dev | openFPGALoader build |
+| dtc (device tree compiler) | DTB compilation |
+| Python 3 + pyserial | Host boot script |
+
+### Step 1: Build openFPGALoader
 
 ```bash
-# 1. Program FPGA
-openFPGALoader -c usb-blaster output/neorv32_demo.rbf
-
-# 2. Boot Linux (~20s transfer + ~118s kernel boot)
-pip install pyserial
-python3 host/boot_linux.py --port /dev/ttyUSB0 --skip-program
+cd tools/openFPGALoader
+mkdir build && cd build
+cmake .. && make -j$(nproc)
 ```
 
-The boot script handles the full sequence: NEORV32 bootloader → stage2 xmodem loader → kernel + DTB + initramfs transfer → Linux console.
+> **Note:** The system-installed openfpgaloader (v0.12.0) does NOT support EP4CE6. Must build from source.
 
-## Boot Sequence
+### Step 2: Build FPGA bitstream
+
+```bash
+cd quartus
+quartus_sh --flow compile neorv32_demo
+quartus_cpf -c -o bitstream_compression=off output_files/neorv32_demo.sof ../output/neorv32_demo.rbf
+```
+
+### Step 3: Build stage2 loader
+
+```bash
+cd sw/stage2_loader
+make NEORV32_HOME=../../neorv32 exe
+cp neorv32_exe.bin ../../output/stage2_loader.bin
+```
+
+### Step 4: Build kernel + initramfs
+
+```bash
+# Extract and patch kernel
+tar xf linux-6.6.83.tar.xz && cd linux-6.6.83
+patch -p1 < ../kernel/neorv32_nommu.patch
+../board/inject_driver.sh .
+
+# Build initramfs (uses Buildroot Linux toolchain for PIE support)
+cd ../sw/initramfs
+make LINUX_DIR=../../linux-6.6.83
+cp neo_initramfs.cpio.gz ../../output/
+
+# Fix initramfs path in defconfig, then build kernel
+cd ../../
+sed "s|CONFIG_INITRAMFS_SOURCE=.*|CONFIG_INITRAMFS_SOURCE=\"$(pwd)/output/neo_initramfs.cpio.gz\"|" \
+    board/linux_defconfig > linux-6.6.83/arch/riscv/configs/neorv32_ax301_defconfig
+cd linux-6.6.83
+make ARCH=riscv CROSS_COMPILE=riscv-none-elf- neorv32_ax301_defconfig
+make ARCH=riscv CROSS_COMPILE=riscv-none-elf- -j$(nproc)
+cp arch/riscv/boot/Image ../output/
+```
+
+### Step 5: Compile device tree
+
+```bash
+dtc -I dts -O dtb -o output/neorv32_ax301.dtb board/neorv32_ax301.dts
+```
+
+### Step 6: Boot
+
+```bash
+python3 host/boot_linux.py --port /dev/ttyUSB0
+```
+
+## System Architecture
+
+### Block Diagram
+
+```
+  AX301 Board (EP4CE6, 50 MHz)
+  ┌─────────────────────────────────────────────────────┐
+  │                                                     │
+  │  ┌───────────────────────────────────────────────┐  │
+  │  │            NEORV32 SoC (RV32IMC)              │  │
+  │  │                                               │  │
+  │  │  ┌───────┐  ┌──────┐  ┌──────┐  ┌─────────┐  │  │
+  │  │  │  CPU  │  │ IMEM │  │ DMEM │  │ Boot ROM│  │  │
+  │  │  │RV32IMC│  │ 8 KB │  │ 8 KB │  │  ~4 KB  │  │  │
+  │  │  │ M+U   │  │ BRAM │  │ BRAM │  │(bootldr)│  │  │
+  │  │  └───┬───┘  └──────┘  └──────┘  └─────────┘  │  │
+  │  │      │                                        │  │
+  │  │  ┌───┴───┐  ┌──────┐  ┌──────┐  ┌─────────┐  │  │
+  │  │  │Wishbone│  │ICACHE│  │DCACHE│  │  CLINT  │  │  │
+  │  │  │  XBUS  │  │      │  │      │  │(timer)  │  │  │
+  │  │  └───┬───┘  └──────┘  └──────┘  └─────────┘  │  │
+  │  │      │                                        │  │
+  │  │  ┌───┴───┐               ┌──────────┐         │  │
+  │  │  │UART0  │               │   GPIO   │         │  │
+  │  │  │115200 │               │  4 LEDs  │         │  │
+  │  │  └───┬───┘               └────┬─────┘         │  │
+  │  └──────┼────────────────────────┼───────────────┘  │
+  │         │                        │                  │
+  │  ┌──────┴──────┐           ┌─────┴─────┐           │
+  │  │wb_sdram_ctrl│           │   LEDs    │           │
+  │  │ (Wishbone   │           └───────────┘           │
+  │  │  → SDRAM)   │                                   │
+  │  └──────┬──────┘                                   │
+  │         │                                          │
+  │  ┌──────┴──────┐                                   │
+  │  │  sdram_ctrl │                                   │
+  │  │  (FSM, CL=3)│                                   │
+  │  └──────┬──────┘                                   │
+  └─────────┼──────────────────────────────────────────┘
+            │
+     ┌──────┴──────┐       ┌────────────┐
+     │  HY57V2562  │       │  PL2303    │
+     │  32 MB SDRAM│       │  USB-UART  │
+     └─────────────┘       └────────────┘
+```
+
+### Boot Sequence (4 stages)
 
 ```
 Power on → NEORV32 internal bootloader (19200 baud, ROM at 0xFFE00000)
@@ -82,16 +207,49 @@ Linux kernel (M-mode, nommu)
   ↓ ~118s boot → /init (mini shell from initramfs)
 ```
 
-## Memory Map
+### FPGA Memory Map
 
 | Address | Size | Description |
 |---------|------|-------------|
-| `0x00000000` | 8 KB | IMEM (M9K BRAM, stage2 loader) |
-| `0x40000000` | 32 MB | SDRAM (kernel + data) |
-| `0x80000000` | 8 KB | DMEM (M9K BRAM) |
-| `0xFFE00000` | ~4 KB | Boot ROM (NEORV32 bootloader) |
-| `0xFFF40000` | — | CLINT (mtime + mtimecmp) |
-| `0xFFF50000` | — | UART0 (console) |
+| `0x00000000` | 8 KB | IMEM (M9K BRAM — stage2 loader) |
+| `0x40000000` | 32 MB | SDRAM (kernel + data, external) |
+| `0x80000000` | 8 KB | DMEM (M9K BRAM — kernel stack/heap) |
+| `0xFFE00000` | ~4 KB | Boot ROM (NEORV32 bootloader, read-only) |
+| `0xFFF40000` | 48 KB | CLINT (mtime at +0xBFF8, mtimecmp at +0x4000) |
+| `0xFFF50000` | 8 B | UART0 (CTRL + DATA registers) |
+| `0xFFFC0000` | 16 B | GPIO (gpio_o[3:0] → LEDs active-low) |
+
+### Linux Runtime Memory Layout (SDRAM)
+
+After boot, the 32 MB SDRAM at `0x40000000` is used as follows:
+
+```
+0x40000000 ┌─────────────────────────┐
+           │     Linux Kernel        │  ~1.4 MB
+           │  .text, .rodata, .data  │
+           │  (loaded by stage2)     │
+0x40170000 ├─────────────────────────┤  (approx)
+           │     Kernel BSS          │  ~49 KB
+0x4017C000 ├─────────────────────────┤
+           │                         │
+           │   Free Memory (buddy)   │  ~30 MB
+           │   managed by page alloc │
+           │                         │
+0x41F00000 ├─────────────────────────┤
+           │   Device Tree Blob      │  ~1.4 KB
+           │   (passed to kernel     │
+           │    via a1 register)     │
+0x41F80000 ├─────────────────────────┤
+           │   initramfs (cpio.gz)   │  ~1.7 KB
+           │   (unpacked by kernel   │
+           │    into rootfs tmpfs)   │
+0x42000000 └─────────────────────────┘  End of 32 MB
+```
+
+**Key runtime numbers** (from kernel log):
+- Total RAM: 32,768 KB (32 MB)
+- Available after boot: 30,972 KB (~30 MB free)
+- Kernel code: 1,035 KB | RW data: 125 KB | RO data: 155 KB | Init: 96 KB | BSS: 49 KB
 
 ## Why Is This Hard?
 
@@ -161,27 +319,6 @@ All patches are in `kernel/neorv32_nommu.patch` (2,280 lines, 15 files modified 
 | `fs/binfmt_elf_fdpic.c` | Boot-time debug markers (non-functional) |
 | `drivers/tty/serial/neorv32_uart.c` | **New file** — custom UART driver |
 
-### Applying the Patch
-
-```bash
-# Download vanilla kernel
-wget https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-6.6.83.tar.xz
-tar xf linux-6.6.83.tar.xz
-cd linux-6.6.83
-
-# Apply patch
-patch -p1 < ../kernel/neorv32_nommu.patch
-
-# Copy defconfig
-cp ../board/linux_defconfig arch/riscv/configs/neorv32_ax301_defconfig
-
-# Build (requires riscv32 cross-compiler)
-make ARCH=riscv CROSS_COMPILE=riscv-none-elf- neorv32_ax301_defconfig
-make ARCH=riscv CROSS_COMPILE=riscv-none-elf- -j$(nproc)
-
-# Output: arch/riscv/boot/Image
-```
-
 ## FPGA RTL
 
 The NEORV32 is configured with these generics in `rtl/ax301_top.vhd`:
@@ -194,64 +331,56 @@ The NEORV32 is configured with these generics in `rtl/ax301_top.vhd`:
 | `ICACHE_EN` | true | Required for SDRAM instruction fetch |
 | `DCACHE_EN` | true | Performance (SDRAM data access) |
 | `IMEM_SIZE` | 8 KB | Stage2 loader fits in 8 KB |
-| `IO_UART0_RX_FIFO` | 4 | 16-entry FIFO for console input |
-
-### Building the Bitstream
-
-Requires [NEORV32](https://github.com/stnolting/neorv32) RTL sources and Intel Quartus Prime Lite 21.1+.
-
-```bash
-# Clone NEORV32 into project root
-git clone https://github.com/stnolting/neorv32.git
-
-# Build
-cd quartus
-quartus_sh --flow compile neorv32_demo
-quartus_cpf -c -o bitstream_compression=off neorv32_demo.sof ../output/neorv32_demo.rbf
-```
+| `DMEM_SIZE` | 8 KB | Kernel stack/heap scratch space |
+| `IO_UART0_RX_FIFO` | 4 | 2^4 = 16-entry FIFO for console input |
+| `IO_UART0_TX_FIFO` | 4 | 2^4 = 16-entry FIFO for console output |
 
 ## Project Structure
 
 ```
 see_neorv32_run_linux/
-├── README.md              — this file
-├── BUILD_LOG.md           — 105-build debugging chronicle
-├── rtl/                   — FPGA design (VHDL/Verilog)
+├── tools/openFPGALoader/  — openFPGALoader source (build from source)
+├── neorv32/               — NEORV32 RTL source (v1.12.8)
+├── linux-6.6.83.tar.xz   — Linux kernel tarball
+├── rtl/                   — Custom FPGA design
 │   ├── ax301_top.vhd      — top-level: NEORV32 + SDRAM + UART + GPIO
 │   ├── wb_sdram_ctrl.v    — Wishbone → SDRAM bridge
-│   └── sdram_ctrl.v       — SDRAM controller FSM
-├── quartus/               — Quartus project files
-├── sw/stage2_loader/      — xmodem boot loader (runs from IMEM)
-├── host/                  — Python host scripts
-│   ├── boot_linux.py       — full boot sequence
-│   └── test_shell.py      — shell command tester
-├── board/                 — board support files
+│   └── sdram_ctrl.v       — SDRAM controller FSM (CL=3, 50 MHz)
+├── quartus/               — Quartus project files (.qsf, .qpf, .sdc)
+├── kernel/
+│   └── neorv32_nommu.patch — 22 kernel patches (vs vanilla 6.6.83)
+├── board/                 — Board support files
 │   ├── neorv32_ax301.dts   — device tree source
 │   ├── linux_defconfig     — kernel config
 │   ├── neorv32_uart.c      — custom UART driver source
-│   ├── inject_driver.sh    — script to inject driver into kernel tree
-│   ├── buildroot_defconfig — Buildroot config (alternative build method)
-│   └── post-build.sh
-├── kernel/
-│   └── neorv32_nommu.patch — all kernel patches (vs vanilla 6.6.83)
-└── output/                — pre-built binaries (ready to boot)
-    ├── neorv32_demo.rbf    — FPGA bitstream (368 KB)
-    ├── stage2_loader.bin   — xmodem boot loader (3.7 KB)
-    ├── Image               — Linux kernel (1.4 MB)
-    ├── neorv32_ax301.dtb   — compiled device tree (1.4 KB)
-    └── neo_initramfs.cpio.gz — root filesystem (1.7 KB)
+│   ├── inject_driver.sh    — injects driver into kernel tree
+│   └── buildroot_defconfig — Buildroot config (alternative build)
+├── sw/
+│   ├── stage2_loader/      — xmodem boot loader (C, runs from IMEM)
+│   │   ├── main.c
+│   │   └── Makefile        — uses NEORV32 common.mk
+│   └── initramfs/          — minimal /init for Linux
+│       ├── init.c           — custom shell (syscalls only, no libc)
+│       └── Makefile
+├── host/                  — Python host scripts
+│   ├── boot_linux.py       — full boot sequence (program + upload + console)
+│   └── test_shell.py       — shell command tester
+├── output/                — build outputs (populated by build steps)
+└── BUILD_LOG.md           — 105-build debugging chronicle
 ```
 
 ## Resource Usage (EP4CE6, 50 MHz)
 
 | Resource | Used | Available | % |
 |----------|------|-----------|---|
-| Logic Elements | ~4,100 | 6,272 | 65% |
-| Memory bits | ~230,000 | 276,480 | 83% |
+| Logic Elements | 4,592 | 6,272 | 73% |
+| Memory bits | 168,960 | 276,480 | 61% |
+| Registers | 2,354 | 6,272 | 38% |
 | Embedded Multipliers | 0 | 30 | 0% |
 
 ## Known Issues
 
+- **Kernel must be built with xPack `riscv-none-elf-gcc` 14.2.0:** Building the kernel with Buildroot's `riscv32-buildroot-linux-gnu-gcc` 12.4.0 produces a binary that hangs in `free_initmem()` — the last debug marker `L` (system_state = RUNNING) prints, but execution never reaches `M` (after free_initmem). This happens despite identical source code, patches, kernel config, and FPGA bitstream. The only variable is the compiler. Root cause is a subtle code generation difference in GCC 12.4.0 that triggers a hang on NEORV32's constrained environment. The Buildroot-built kernel also runs noticeably slower overall (clocksource switch at 13.8s vs 7.4s, triggers `sched: RT throttling activated`). **Always use the xPack bare-metal toolchain for the kernel.**
 - **Boot time ~118s:** Mostly spent in driver probing and async work queue timeouts. The 50 MHz single-issue core is genuinely slow for kernel init.
 - **SDRAM intermittent init failure:** Occasionally fails on first power-on. Power-cycle the board (off for a few seconds) to resolve.
 - **Shell is minimal:** Only `uname`, `info`, `help`, `exit`. The init binary is a custom C program, not busybox (to keep initramfs tiny).
