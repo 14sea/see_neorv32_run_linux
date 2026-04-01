@@ -4,6 +4,8 @@ Booting nommu Linux (kernel 6.6.83) on a **NEORV32** RV32IMC soft-core FPGA — 
 
 The NEORV32 is a microcontroller-class processor with **no MMU**, **no S-mode**, and **no atomic instructions**. Getting Linux to run on it required 22 patches across the kernel's arch/riscv, scheduler, RCU, init, and driver subsystems.
 
+**Demo video:** https://youtu.be/JC6qNcMIWf8
+
 ## Documentation
 
 This repository includes three types of documentation, each for a different audience:

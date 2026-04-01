@@ -4,6 +4,8 @@
 
 NEORV32 是一个微控制器级处理器，**没有 MMU**、**没有 S-mode**、**没有原子指令**。让 Linux 在其上运行需要对内核的 arch/riscv、调度器、RCU、init 和驱动子系统进行 22 个补丁。
 
+**演示视频：** https://youtu.be/JC6qNcMIWf8
+
 ## 文档
 
 本仓库包含三类文档，分别面向不同的读者：
