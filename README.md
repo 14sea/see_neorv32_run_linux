@@ -1,8 +1,8 @@
 # See NEORV32 Run Linux
 
-Booting nommu Linux (kernel 6.6.83) on a **NEORV32** RV32IMC soft-core FPGA — believed to be the first successful Linux boot on NEORV32.
+Booting nommu Linux (kernel 6.6.83) on a **NEORV32** RV32IMAC soft-core FPGA — believed to be the first successful Linux boot on NEORV32.
 
-The NEORV32 is a microcontroller-class processor with **no MMU**, **no S-mode**, and **no atomic instructions**. Getting Linux to run on it required 22 patches across the kernel's arch/riscv, scheduler, RCU, init, and driver subsystems.
+The NEORV32 is a microcontroller-class processor with **no MMU** and **no S-mode**. Getting Linux to run on it required 17 patches across the kernel's arch/riscv, scheduler, RCU, init, and driver subsystems.
 
 **Demo video:** https://youtu.be/JC6qNcMIWf8
 
@@ -30,7 +30,7 @@ Then paste the contents of `init_prompt.txt` as your first message. Claude Code 
 |-----------|------|
 | **Board** | Heijin (黑金) AX301 |
 | **FPGA** | Altera Cyclone IV E EP4CE6F17C8 (6,272 LEs) |
-| **CPU** | NEORV32 RV32IMC, 50 MHz, M-mode only |
+| **CPU** | NEORV32 RV32IMAC, 50 MHz, M-mode only |
 | **RAM** | 32 MB SDRAM (HY57V2562GTR) |
 | **UART** | PL2303 USB-UART, 115200 baud |
 | **Programmer** | USB-Blaster via openFPGALoader |
@@ -156,11 +156,11 @@ python3 host/boot_linux.py --port /dev/ttyUSB0
   ┌─────────────────────────────────────────────────────┐
   │                                                     │
   │  ┌───────────────────────────────────────────────┐  │
-  │  │            NEORV32 SoC (RV32IMC)              │  │
+  │  │            NEORV32 SoC (RV32IMAC)              │  │
   │  │                                               │  │
   │  │  ┌───────┐  ┌──────┐  ┌──────┐  ┌─────────┐  │  │
   │  │  │  CPU  │  │ IMEM │  │ DMEM │  │ Boot ROM│  │  │
-  │  │  │RV32IMC│  │ 8 KB │  │ 8 KB │  │  ~4 KB  │  │  │
+  │  │  │RV32IMAC│  │ 8 KB │  │ 8 KB │  │  ~4 KB  │  │  │
   │  │  │ M+U   │  │ BRAM │  │ BRAM │  │(bootldr)│  │  │
   │  │  └───┬───┘  └──────┘  └──────┘  └─────────┘  │  │
   │  │      │                                        │  │
@@ -257,69 +257,67 @@ After boot, the 32 MB SDRAM at `0x40000000` is used as follows:
 
 NEORV32 is a microcontroller core — it was never designed to run Linux. Here's what we had to work around:
 
-### 1. No Atomic Instructions
-
-NEORV32 has no LR/SC (load-reserved / store-conditional) and no AMO (atomic memory operations). The Linux kernel uses these **everywhere**: spinlocks, atomic counters, cmpxchg, bitops.
-
-**Solution:** Replace all LR/SC sequences with IRQ-safe load/modify/store. This is safe because NEORV32 is single-core and we disable interrupts around critical sections. Files: `cmpxchg.h`, `atomic.h`, `bitops.h`.
-
-### 2. No MMU, No S-mode
+### 1. No MMU, No S-mode
 
 Linux normally runs in S-mode (supervisor) with virtual memory. NEORV32 only has M-mode (machine) and U-mode. We run the kernel directly in M-mode using the `nommu` configuration.
 
 **Key config:** `CONFIG_MMU=n`, `CONFIG_PAGE_OFFSET=0x40000000` (must match physical RAM base).
 
-### 3. Scheduler Deadlocks
+### 2. Scheduler Deadlocks
 
-The kernel scheduler uses `need_resched` loops that rely on atomic test-and-set operations. Without atomics, these become infinite ping-pong loops between threads.
+The kernel scheduler's `need_resched` loop assumes preemption works at all points. In our single-core nommu environment, these can become infinite ping-pong loops between threads.
 
 **Solution:** Modified `schedule()` and `preempt_schedule_common()` to execute `__schedule()` exactly once instead of looping on `need_resched`. Added `schedule_preempt_disabled_once()` for kthread startup.
 
-### 4. `wfi` Halts the CPU
+### 3. `wfi` Halts the CPU
 
-NEORV32's `wfi` (wait-for-interrupt) instruction halts the CPU if no interrupt is pending. The kernel uses `wfi` in idle loops, which can permanently freeze the system.
+The RISC-V `wfi` (wait-for-interrupt) instruction halts the CPU until an interrupt arrives. In M-mode nommu with a polling TTY driver and timer-only IRQs, the CPU can freeze permanently if `wfi` is reached with no pending interrupt source.
 
-**Solution:** `wfi` → `nop` in `arch/riscv/include/asm/processor.h`.
+**Solution:** `wfi` → `nop` in `arch/riscv/include/asm/processor.h`. This is a conservative workaround; `wfi` itself is standard RISC-V behavior.
 
-### 5. RISCV_ALTERNATIVE Patching Conflict
+### 4. RISCV_ALTERNATIVE Patching Conflict
 
-The kernel's alternative instruction patching framework (`RISCV_ALTERNATIVE`) replaces instructions at runtime based on detected ISA extensions. This conflicts with our non-atomic replacements — after `free_initmem()`, the CPU jumps into the `.alternative` section and executes data as code (illegal instruction trap at `epc=0x4011c002`).
+The kernel's alternative instruction patching framework (`RISCV_ALTERNATIVE`) replaces instructions at runtime based on detected ISA extensions. After `free_initmem()`, the `.alternative` section's __init data is freed, causing the CPU to execute freed memory as code (illegal instruction trap at `epc=0x4011c002`).
 
-**Solution:** Disable `RISCV_ALTERNATIVE` entirely in `arch/riscv/Kconfig`. This was the final fix (Build #105) after 104 failed attempts.
+**Solution:** Disable `RISCV_ALTERNATIVE` entirely in `arch/riscv/Kconfig`.
 
-### 6. RCU / Work Queue Stalls
+### 5. RCU / Work Queue Stalls
 
-Single-threaded RCU (`srcutiny`) and async work queues assume preemptive scheduling works correctly. On our non-atomic core, grace periods never complete and `synchronize_srcu()` hangs forever.
+Single-threaded RCU (`srcutiny`) and async work queues assume preemptive scheduling works correctly. On our single-core nommu system, grace periods never complete and `synchronize_srcu()` hangs forever.
 
 **Solution:** Synchronous grace period in `srcutiny.c`, synchronous `populate_rootfs()` in `initramfs.c`, 120s timeout for `async_synchronize_full()`.
 
-### 7. UART Driver
+### 6. UART Driver
 
 NEORV32's UART is not supported by any upstream Linux driver. We wrote a custom `neorv32_uart.c` tty driver with kthread-based polling (no IRQ) and direct line discipline delivery.
 
 ## Kernel Patches
 
-All patches are in `kernel/neorv32_nommu.patch` (2,280 lines, 15 files modified against vanilla 6.6.83).
+All patches are in `kernel/neorv32_nommu.patch` (1,126 lines, 17 files against vanilla 6.6.83).
+
+**Note:** NEORV32 supports the A extension (Zaamo + Zalrsc). LR/SC reservation is CPU-internal — the Wishbone bus sees only normal load/store — so native atomics work correctly even through external SDRAM. No atomic instruction patches are needed.
 
 ### Files Modified
 
 | File | Change |
 |------|--------|
 | `arch/riscv/Kconfig` | Disable `RISCV_ALTERNATIVE` |
-| `arch/riscv/include/asm/cmpxchg.h` | LR/SC → non-atomic load/store |
-| `arch/riscv/include/asm/atomic.h` | AMO → non-atomic C operations |
-| `arch/riscv/include/asm/bitops.h` | AMO bitops → IRQ-safe load/modify/store |
 | `arch/riscv/include/asm/processor.h` | `wfi` → `nop` |
+| `arch/riscv/kernel/traps.c` | M-mode trap handling adjustments |
 | `kernel/sched/core.c` | Single-shot `__schedule()`, no `need_resched` loop |
-| `kernel/kthread.c` | Use `schedule_preempt_disabled_once()` |
+| `kernel/sched/rt.c` | RT scheduler adjustments for nommu |
+| `kernel/kthread.c` | Use `schedule_preempt_disabled_once()`, kthreadd priority boost |
 | `kernel/rcu/srcutiny.c` | Synchronous SRCU grace period |
 | `kernel/async.c` | 120s timeout for `async_synchronize_full()` |
 | `include/linux/sched.h` | Declare `schedule_preempt_disabled_once()` |
+| `include/linux/srcutiny.h` | SRCU structure adjustments |
 | `init/main.c` | SCHED_FIFO boost for init, disable initmem poison |
 | `init/initramfs.c` | Synchronous `populate_rootfs()` |
-| `fs/exec.c` | Boot-time debug markers (non-functional) |
-| `fs/binfmt_elf_fdpic.c` | Boot-time debug markers (non-functional) |
+| `drivers/tty/serial/Kconfig` | Add NEORV32 UART option |
+| `drivers/tty/serial/Makefile` | Build neorv32_uart.o |
 | `drivers/tty/serial/neorv32_uart.c` | **New file** — custom UART driver |
+| `arch/riscv/configs/neorv32_defconfig` | **New file** — kernel config |
+| `arch/riscv/configs/neorv32_ax301_defconfig` | **New file** — AX301 board config |
 
 ## FPGA RTL
 
@@ -330,6 +328,8 @@ The NEORV32 is configured with these generics in `rtl/ax301_top.vhd`:
 | `RISCV_ISA_C` | true | Compressed instructions (smaller code) |
 | `RISCV_ISA_M` | true | Hardware multiply/divide |
 | `RISCV_ISA_U` | true | U-mode for Linux userspace |
+| `RISCV_ISA_Zaamo` | true | Atomic memory operations (AMO) |
+| `RISCV_ISA_Zalrsc` | true | Load-reserved / store-conditional (LR/SC) |
 | `ICACHE_EN` | true | Required for SDRAM instruction fetch |
 | `DCACHE_EN` | true | Performance (SDRAM data access) |
 | `IMEM_SIZE` | 8 KB | Stage2 loader fits in 8 KB |

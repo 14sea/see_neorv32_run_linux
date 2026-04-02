@@ -2,7 +2,7 @@
 
 在 **NEORV32** RV32IMC 软核 FPGA 上启动 nommu Linux（内核 6.6.83）—— 据信是 NEORV32 上首次成功的 Linux 启动。
 
-NEORV32 是一个微控制器级处理器，**没有 MMU**、**没有 S-mode**、**没有原子指令**。让 Linux 在其上运行需要对内核的 arch/riscv、调度器、RCU、init 和驱动子系统进行 22 个补丁。
+NEORV32 是一个微控制器级处理器，**没有 MMU**、**没有 S-mode**。让 Linux 在其上运行需要对内核的 arch/riscv、调度器、RCU、init 和驱动子系统进行 17 个补丁。
 
 **演示视频：** https://youtu.be/JC6qNcMIWf8
 
@@ -30,7 +30,7 @@ claude
 |------|------|
 | **开发板** | 黑金 AX301 |
 | **FPGA** | Altera Cyclone IV E EP4CE6F17C8（6,272 LEs） |
-| **CPU** | NEORV32 RV32IMC，50 MHz，仅 M-mode |
+| **CPU** | NEORV32 RV32IMAC，50 MHz，仅 M-mode |
 | **内存** | 32 MB SDRAM（HY57V2562GTR） |
 | **串口** | PL2303 USB-UART，115200 波特率 |
 | **烧写器** | USB-Blaster，通过 openFPGALoader |
@@ -160,7 +160,7 @@ python3 host/boot_linux.py --port /dev/ttyUSB0
   │  │                                               │  │
   │  │  ┌───────┐  ┌──────┐  ┌──────┐  ┌─────────┐  │  │
   │  │  │  CPU  │  │ IMEM │  │ DMEM │  │ Boot ROM│  │  │
-  │  │  │RV32IMC│  │ 8 KB │  │ 8 KB │  │  ~4 KB  │  │  │
+  │  │  │RV32IMAC│  │ 8 KB │  │ 8 KB │  │  ~4 KB  │  │  │
   │  │  │ M+U   │  │ BRAM │  │ BRAM │  │(bootldr)│  │  │
   │  │  └───┬───┘  └──────┘  └──────┘  └─────────┘  │  │
   │  │      │                                        │  │
@@ -257,69 +257,67 @@ Linux 内核（M-mode，nommu）
 
 NEORV32 是一个微控制器核心 —— 它从未被设计为运行 Linux。以下是我们需要解决的问题：
 
-### 1. 没有原子指令
-
-NEORV32 没有 LR/SC（load-reserved / store-conditional）也没有 AMO（原子内存操作）。Linux 内核**到处**使用这些：自旋锁、原子计数器、cmpxchg、位操作。
-
-**解决方案：** 将所有 LR/SC 序列替换为关中断的 load/modify/store。这在 NEORV32 上是安全的，因为它是单核的，我们在临界区周围禁用中断。涉及文件：`cmpxchg.h`、`atomic.h`、`bitops.h`。
-
-### 2. 没有 MMU，没有 S-mode
+### 1. 没有 MMU，没有 S-mode
 
 Linux 通常在 S-mode（超级用户模式）下运行，并使用虚拟内存。NEORV32 只有 M-mode（机器模式）和 U-mode。我们使用 `nommu` 配置直接在 M-mode 下运行内核。
 
 **关键配置：** `CONFIG_MMU=n`，`CONFIG_PAGE_OFFSET=0x40000000`（必须与物理 RAM 基址匹配）。
 
-### 3. 调度器死锁
+### 2. 调度器死锁
 
-内核调度器使用依赖原子 test-and-set 操作的 `need_resched` 循环。没有原子操作，这些会变成线程间的无限乒乓循环。
+内核调度器的 `need_resched` 循环假设抢占在所有点都能工作。在我们的单核 nommu 环境中，这些会变成线程间的无限乒乓循环。
 
 **解决方案：** 修改 `schedule()` 和 `preempt_schedule_common()`，使 `__schedule()` 只执行一次，而不是循环检查 `need_resched`。为 kthread 启动添加了 `schedule_preempt_disabled_once()`。
 
-### 4. `wfi` 导致 CPU 停机
+### 3. `wfi` 导致 CPU 停机
 
-NEORV32 的 `wfi`（等待中断）指令在没有待处理中断时会停止 CPU。内核在空闲循环中使用 `wfi`，这可能导致系统永久冻结。
+RISC-V 的 `wfi`（等待中断）指令在没有待处理中断时会停止 CPU。在 M-mode nommu 环境下，使用轮询 TTY 驱动和仅有定时器中断时，CPU 可能因无待处理中断源而永久冻结。
 
-**解决方案：** 在 `arch/riscv/include/asm/processor.h` 中将 `wfi` 替换为 `nop`。
+**解决方案：** 在 `arch/riscv/include/asm/processor.h` 中将 `wfi` 替换为 `nop`。这是一个保守的做法；`wfi` 本身是标准 RISC-V 行为。
 
-### 5. RISCV_ALTERNATIVE 补丁冲突
+### 4. RISCV_ALTERNATIVE 补丁冲突
 
-内核的替代指令补丁框架（`RISCV_ALTERNATIVE`）会在运行时根据检测到的 ISA 扩展替换指令。这与我们的非原子替换冲突 —— 在 `free_initmem()` 之后，CPU 跳入 `.alternative` 段并将数据作为代码执行（在 `epc=0x4011c002` 处触发非法指令陷阱）。
+内核的替代指令补丁框架（`RISCV_ALTERNATIVE`）会在运行时根据检测到的 ISA 扩展替换指令。在 `free_initmem()` 之后，`.alternative` 段的 __init 数据被释放，CPU 跳入已释放的内存执行代码（在 `epc=0x4011c002` 处触发非法指令陷阱）。
 
-**解决方案：** 在 `arch/riscv/Kconfig` 中完全禁用 `RISCV_ALTERNATIVE`。这是第 105 次构建中的最终修复，在此之前经历了 104 次失败尝试。
+**解决方案：** 在 `arch/riscv/Kconfig` 中完全禁用 `RISCV_ALTERNATIVE`。
 
-### 6. RCU / 工作队列停滞
+### 5. RCU / 工作队列停滞
 
-单线程 RCU（`srcutiny`）和异步工作队列假设抢占调度正常工作。在我们的非原子核心上，宽限期永远无法完成，`synchronize_srcu()` 会永久挂起。
+单线程 RCU（`srcutiny`）和异步工作队列假设抢占调度正常工作。在我们的单核 nommu 系统上，宽限期永远无法完成，`synchronize_srcu()` 会永久挂起。
 
 **解决方案：** `srcutiny.c` 中的同步宽限期，`initramfs.c` 中的同步 `populate_rootfs()`，`async_synchronize_full()` 的 120 秒超时。
 
-### 7. UART 驱动
+### 6. UART 驱动
 
 NEORV32 的 UART 不被任何上游 Linux 驱动支持。我们编写了自定义的 `neorv32_uart.c` tty 驱动，使用基于 kthread 的轮询（无 IRQ）并直接进行行规程传递。
 
 ## 内核补丁
 
-所有补丁位于 `kernel/neorv32_nommu.patch`（2,280 行，针对原版 6.6.83 修改了 15 个文件）。
+所有补丁位于 `kernel/neorv32_nommu.patch`（1,126 行，针对原版 6.6.83 修改了 17 个文件）。
+
+**注意：** NEORV32 支持 A 扩展（Zaamo + Zalrsc）。LR/SC 的 reservation 机制是 CPU 内部的 —— Wishbone 总线只看到普通的 load/store —— 因此原子指令在外部 SDRAM 上也能正常工作。无需修改原子指令相关代码。
 
 ### 修改的文件
 
 | 文件 | 修改内容 |
 |------|---------|
 | `arch/riscv/Kconfig` | 禁用 `RISCV_ALTERNATIVE` |
-| `arch/riscv/include/asm/cmpxchg.h` | LR/SC → 非原子 load/store |
-| `arch/riscv/include/asm/atomic.h` | AMO → 非原子 C 操作 |
-| `arch/riscv/include/asm/bitops.h` | AMO 位操作 → 关中断的 load/modify/store |
 | `arch/riscv/include/asm/processor.h` | `wfi` → `nop` |
+| `arch/riscv/kernel/traps.c` | M-mode 陷阱处理调整 |
 | `kernel/sched/core.c` | 单次 `__schedule()`，不循环检查 `need_resched` |
-| `kernel/kthread.c` | 使用 `schedule_preempt_disabled_once()` |
+| `kernel/sched/rt.c` | 实时调度器 nommu 调整 |
+| `kernel/kthread.c` | 使用 `schedule_preempt_disabled_once()`，kthreadd 优先级提升 |
 | `kernel/rcu/srcutiny.c` | 同步 SRCU 宽限期 |
 | `kernel/async.c` | `async_synchronize_full()` 120 秒超时 |
 | `include/linux/sched.h` | 声明 `schedule_preempt_disabled_once()` |
+| `include/linux/srcutiny.h` | SRCU 结构调整 |
 | `init/main.c` | init 的 SCHED_FIFO 提升，禁用 initmem 毒化 |
 | `init/initramfs.c` | 同步 `populate_rootfs()` |
-| `fs/exec.c` | 启动时调试标记（无功能性影响） |
-| `fs/binfmt_elf_fdpic.c` | 启动时调试标记（无功能性影响） |
+| `drivers/tty/serial/Kconfig` | 添加 NEORV32 UART 选项 |
+| `drivers/tty/serial/Makefile` | 构建 neorv32_uart.o |
 | `drivers/tty/serial/neorv32_uart.c` | **新文件** — 自定义 UART 驱动 |
+| `arch/riscv/configs/neorv32_defconfig` | **新文件** — 内核配置 |
+| `arch/riscv/configs/neorv32_ax301_defconfig` | **新文件** — AX301 板级配置 |
 
 ## FPGA RTL
 
@@ -330,6 +328,8 @@ NEORV32 在 `rtl/ax301_top.vhd` 中使用以下泛型参数配置：
 | `RISCV_ISA_C` | true | 压缩指令（更小的代码） |
 | `RISCV_ISA_M` | true | 硬件乘法/除法 |
 | `RISCV_ISA_U` | true | Linux 用户空间的 U-mode |
+| `RISCV_ISA_Zaamo` | true | 原子内存操作（AMO） |
+| `RISCV_ISA_Zalrsc` | true | Load-reserved / store-conditional（LR/SC） |
 | `ICACHE_EN` | true | SDRAM 指令取指所需 |
 | `DCACHE_EN` | true | 性能优化（SDRAM 数据访问） |
 | `IMEM_SIZE` | 8 KB | Stage2 加载器可放入 8 KB |
