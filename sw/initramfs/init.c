@@ -117,7 +117,7 @@ static void cmd_amo(void) {
     int result, tmp;
     int pass = 0, fail = 0;
 
-    my_puts("=== AMO / LR/SC test ===\n");
+    my_puts("=== AMO test (Zaamo) ===\n");
 
     /* Test 1: amoadd.w */
     val = 100;
@@ -155,7 +155,9 @@ static void cmd_amo(void) {
     if (result == 0xFF && val == 0x0F) { my_puts("  [PASS]\n"); pass++; }
     else { my_puts("  [FAIL]\n"); fail++; }
 
-    /* Test 5: lr.w / sc.w */
+    my_puts("\n=== LR/SC detailed tests ===\n");
+
+    /* Test A: Basic lr.w/sc.w (reproduce original bug) */
     val = 42;
     __asm__ volatile(
         "lr.w %0, (%2)\n"
@@ -163,13 +165,121 @@ static void cmd_amo(void) {
         : "=&r"(result), "=&r"(tmp)
         : "r"(&val), "r"(99)
         : "memory");
-    my_puts("lr.w/sc.w: old="); my_puthex(result);
-    my_puts(" sc="); my_puthex(tmp);
-    my_puts(" new="); my_puthex(val); my_puts("\n");
+    my_puts("A) basic: lr="); my_puthex(result);
+    my_puts(" sc.rd="); my_puthex(tmp);
+    my_puts(" mem="); my_puthex(val); my_puts("\n");
+    my_puts("   expect: lr=0x2a sc.rd=0x00 mem=0x63\n");
     if (result == 42 && tmp == 0 && val == 99) { my_puts("  [PASS]\n"); pass++; }
     else { my_puts("  [FAIL]\n"); fail++; }
 
-    my_puts("Result: ");
+    /* Test B: Explicit register test — use %0/%1 but with early-clobber,
+     * and print which registers the compiler actually chose */
+    val = 0x100;
+    result = -1;
+    tmp = -1;
+    __asm__ volatile(
+        "lr.w %0, (%2)\n"
+        "sc.w %1, %3, (%2)\n"
+        : "=&r"(result), "=&r"(tmp)
+        : "r"(&val), "r"(0x200)
+        : "memory");
+    my_puts("B) val=0x100: lr="); my_puthex(result);
+    my_puts(" sc.rd="); my_puthex(tmp);
+    my_puts(" mem="); my_puthex(val); my_puts("\n");
+    my_puts("   expect: lr=0x100 sc.rd=0x00 mem=0x200\n");
+    if (result == 0x100 && tmp == 0 && val == 0x200) { my_puts("  [PASS]\n"); pass++; }
+    else { my_puts("  [FAIL]\n"); fail++; }
+
+    /* Test C: sc.w with val=0 — distinguish "returns old val" from "returns 0=success" */
+    val = 0;  /* lr.w will load 0 — if sc.w returns old val, it's also 0 (ambiguous!) */
+    __asm__ volatile(
+        "lr.w %0, (%2)\n"
+        "sc.w %1, %3, (%2)\n"
+        : "=&r"(result), "=&r"(tmp)
+        : "r"(&val), "r"(77)
+        : "memory");
+    my_puts("C) val=0: lr="); my_puthex(result);
+    my_puts(" sc.rd="); my_puthex(tmp);
+    my_puts(" mem="); my_puthex(val); my_puts("\n");
+    my_puts("   expect: lr=0x00 sc.rd=0x00 mem=0x4d\n");
+    my_puts("   (ambiguous if bug returns old val which is also 0)\n");
+    if (result == 0 && tmp == 0 && val == 77) { my_puts("  [PASS/ambiguous]\n"); pass++; }
+    else { my_puts("  [FAIL]\n"); fail++; }
+
+    /* Test D: sc.w with val=1 — if sc.w returns old val (1), it looks like "failure" */
+    val = 1;
+    __asm__ volatile(
+        "lr.w %0, (%2)\n"
+        "sc.w %1, %3, (%2)\n"
+        : "=&r"(result), "=&r"(tmp)
+        : "r"(&val), "r"(88)
+        : "memory");
+    my_puts("D) val=1: lr="); my_puthex(result);
+    my_puts(" sc.rd="); my_puthex(tmp);
+    my_puts(" mem="); my_puthex(val); my_puts("\n");
+    my_puts("   expect: lr=0x01 sc.rd=0x00 mem=0x58\n");
+    my_puts("   (if bug: sc.rd=0x01 = old val, looks like sc failed)\n");
+    if (result == 1 && tmp == 0 && val == 88) { my_puts("  [PASS]\n"); pass++; }
+    else { my_puts("  [FAIL]\n"); fail++; }
+
+    /* Test E: sc.w should FAIL — store between lr.w and sc.w breaks reservation */
+    val = 42;
+    __asm__ volatile(
+        "lr.w %0, (%2)\n"
+        "sw   %3, 0(%2)\n"       /* intervening store — should break reservation */
+        "sc.w %1, %4, (%2)\n"
+        : "=&r"(result), "=&r"(tmp)
+        : "r"(&val), "r"(55), "r"(99)
+        : "memory");
+    my_puts("E) broken resv: lr="); my_puthex(result);
+    my_puts(" sc.rd="); my_puthex(tmp);
+    my_puts(" mem="); my_puthex(val); my_puts("\n");
+    my_puts("   expect: lr=0x2a sc.rd=nonzero mem=0x37(55, sc failed)\n");
+    if (result == 42 && tmp != 0 && val == 55) { my_puts("  [PASS]\n"); pass++; }
+    else {
+        my_puts("  [FAIL]");
+        if (tmp == 0) my_puts(" (sc.w wrongly succeeded!)");
+        if (val == 99) my_puts(" (sc.w wrote despite broken resv!)");
+        my_puts("\n");
+        fail++;
+    }
+
+    /* Test F: second sc.w should FAIL — reservation consumed by first sc.w */
+    val = 42;
+    {
+        int tmp2;
+        __asm__ volatile(
+            "lr.w %0, (%3)\n"
+            "sc.w %1, %4, (%3)\n"    /* first sc.w — should succeed */
+            "sc.w %2, %5, (%3)\n"    /* second sc.w — should fail */
+            : "=&r"(result), "=&r"(tmp), "=&r"(tmp2)
+            : "r"(&val), "r"(99), "r"(200)
+            : "memory");
+        my_puts("F) double sc: lr="); my_puthex(result);
+        my_puts(" sc1.rd="); my_puthex(tmp);
+        my_puts(" sc2.rd="); my_puthex(tmp2);
+        my_puts(" mem="); my_puthex(val); my_puts("\n");
+        my_puts("   expect: lr=0x2a sc1.rd=0x00 sc2.rd=nonzero mem=0x63\n");
+        if (result == 42 && tmp == 0 && tmp2 != 0 && val == 99) { my_puts("  [PASS]\n"); pass++; }
+        else {
+            my_puts("  [FAIL]");
+            if (tmp2 == 0) my_puts(" (2nd sc.w wrongly succeeded!)");
+            if (val == 200) my_puts(" (2nd sc.w wrote!)");
+            my_puts("\n");
+            fail++;
+        }
+    }
+
+    /* Test G: lr.w only (no sc.w) — confirm lr.w works in isolation */
+    val = 0xCAFE;
+    __asm__ volatile("lr.w %0, (%1)" : "=r"(result) : "r"(&val) : "memory");
+    my_puts("G) lr.w only: lr="); my_puthex(result);
+    my_puts(" mem="); my_puthex(val); my_puts("\n");
+    my_puts("   expect: lr=0xcafe mem=0xcafe\n");
+    if (result == 0xCAFE && val == 0xCAFE) { my_puts("  [PASS]\n"); pass++; }
+    else { my_puts("  [FAIL]\n"); fail++; }
+
+    my_puts("\nResult: ");
     my_putnum(pass); my_puts("/"); my_putnum(pass + fail);
     my_puts(pass + fail == pass ? " ALL PASSED\n" : " SOME FAILED\n");
 }
