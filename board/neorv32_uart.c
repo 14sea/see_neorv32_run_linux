@@ -10,12 +10,14 @@
  *               [30]:RX_OVER  [31]:TX_BUSY
  *   +0x4  DATA  [7:0]: TX/RX byte
  *
- * Polling mode only (no interrupt support yet).
- * Based on liteuart.c structure and U-Boot serial_neorv32.c register knowledge.
+ * Polling mode with kthread (not timer) to ensure tty flip buffer flush
+ * runs in process context — required on UP PREEMPT_NONE where unbound
+ * work queue kworkers may not get scheduled promptly.
  */
 
 #include <linux/console.h>
 #include <linux/init.h>
+#include <linux/kthread.h>
 #include <linux/module.h>
 #include <linux/of.h>
 #include <linux/platform_device.h>
@@ -23,7 +25,14 @@
 #include <linux/serial_core.h>
 #include <linux/tty_flip.h>
 #include <linux/timer.h>
+#include <linux/delay.h>
 #include <linux/io.h>
+
+/* Forward declare debug function */
+static void neo_uart_dbg(char c);
+
+/* tty_ldisc_receive_buf from drivers/tty/tty_buffer.c */
+#include <linux/tty_ldisc.h>
 
 #define DRIVER_NAME	"neorv32-uart"
 #define DEV_NAME	"ttyNEO"
@@ -45,7 +54,8 @@
 
 struct neorv32_port {
 	struct uart_port port;
-	struct timer_list timer;
+	struct task_struct *poll_thread;
+	bool port_open;
 };
 
 #define to_neo_port(p) container_of(p, struct neorv32_port, port)
@@ -61,18 +71,9 @@ static void neorv32_putchar(struct uart_port *port, unsigned char ch)
 	writel(ch, port->membase + NEO_DATA);
 }
 
-static void neorv32_rx_chars(struct uart_port *port)
-{
-	unsigned char ch;
-
-	while (readl(port->membase + NEO_CTRL) & CTRL_RX_NEMPTY) {
-		ch = readl(port->membase + NEO_DATA) & 0xFF;
-		port->icount.rx++;
-		if (!uart_handle_sysrq_char(port, ch))
-			uart_insert_char(port, 0, 0, ch, TTY_NORMAL);
-	}
-	tty_flip_buffer_push(&port->state->port);
-}
+/* neorv32_rx_chars is replaced by neorv32_rx_direct + tty_ldisc_receive_buf
+ * in the kthread.  No flip buffer needed.
+ */
 
 static void neorv32_tx_chars(struct uart_port *port)
 {
@@ -83,20 +84,63 @@ static void neorv32_tx_chars(struct uart_port *port)
 		writel(ch, port->membase + NEO_DATA));
 }
 
-/* ── Polling timer ─────────────────────────────────────────────────────── */
+/* ── Polling kthread ──────────────────────────────────────────────────── */
 
-static void neorv32_timer_func(struct timer_list *t)
+/*
+ * Read RX chars directly into a local buffer (not flip buffer).
+ * Returns number of chars read.
+ */
+static int neorv32_rx_direct(struct uart_port *port, u8 *buf, int max)
 {
-	struct neorv32_port *neo = from_timer(neo, t, timer);
+	int n = 0;
+
+	while (n < max && (readl(port->membase + NEO_CTRL) & CTRL_RX_NEMPTY)) {
+		buf[n++] = readl(port->membase + NEO_DATA) & 0xFF;
+		port->icount.rx++;
+	}
+	return n;
+}
+
+static int neorv32_poll_thread(void *data)
+{
+	struct neorv32_port *neo = data;
 	struct uart_port *port = &neo->port;
+	struct tty_struct *tty;
+	struct tty_ldisc *ld;
 	unsigned long flags;
+	u8 rxbuf[64];
+	u8 flags_buf[64];
+	int got;
 
-	spin_lock_irqsave(&port->lock, flags);
-	neorv32_rx_chars(port);
-	neorv32_tx_chars(port);
-	spin_unlock_irqrestore(&port->lock, flags);
+	while (!kthread_should_stop()) {
+		/* RX: read chars from UART hardware */
+		spin_lock_irqsave(&port->lock, flags);
+		got = neorv32_rx_direct(port, rxbuf, sizeof(rxbuf));
+		spin_unlock_irqrestore(&port->lock, flags);
 
-	mod_timer(&neo->timer, jiffies + uart_poll_timeout(port));
+		if (got && port->state) {
+			tty = port->state->port.tty;
+			if (tty) {
+				ld = tty_ldisc_ref(tty);
+				if (ld) {
+					memset(flags_buf, TTY_NORMAL, got);
+					tty_ldisc_receive_buf(ld, rxbuf,
+							      flags_buf, got);
+					tty_ldisc_deref(ld);
+				}
+			}
+		}
+
+		/* TX: drain any pending output */
+		spin_lock_irqsave(&port->lock, flags);
+		neorv32_tx_chars(port);
+		spin_unlock_irqrestore(&port->lock, flags);
+
+		/* Yield CPU so other tasks (e.g. shell) can run */
+		schedule_timeout_interruptible(1);
+	}
+
+	return 0;
 }
 
 /* ── uart_ops ──────────────────────────────────────────────────────────── */
@@ -125,14 +169,24 @@ static int neorv32_startup(struct uart_port *port)
 	struct neorv32_port *neo = to_neo_port(port);
 	u32 ctrl;
 
+	neo_uart_dbg('S');  /* startup called */
+
 	/* Ensure UART is enabled (U-Boot already set baud rate) */
 	ctrl = readl(port->membase + NEO_CTRL);
 	writel(ctrl | CTRL_EN, port->membase + NEO_CTRL);
 
-	/* Start polling timer for RX */
-	timer_setup(&neo->timer, neorv32_timer_func, 0);
-	mod_timer(&neo->timer, jiffies + uart_poll_timeout(port));
+	neo->port_open = true;
 
+	/* Start polling kthread */
+	neo->poll_thread = kthread_run(neorv32_poll_thread, neo,
+				       "neorv32_poll");
+	if (IS_ERR(neo->poll_thread)) {
+		neo->poll_thread = NULL;
+		neo_uart_dbg('!');
+		return PTR_ERR(neo->poll_thread);
+	}
+
+	neo_uart_dbg('s');  /* startup done, kthread started */
 	return 0;
 }
 
@@ -140,7 +194,11 @@ static void neorv32_shutdown(struct uart_port *port)
 {
 	struct neorv32_port *neo = to_neo_port(port);
 
-	del_timer_sync(&neo->timer);
+	neo->port_open = false;
+	if (neo->poll_thread) {
+		kthread_stop(neo->poll_thread);
+		neo->poll_thread = NULL;
+	}
 }
 
 static void neorv32_set_termios(struct uart_port *port,
@@ -277,8 +335,9 @@ static int neorv32_probe(struct platform_device *pdev)
 {
 	struct neorv32_port *neo;
 	struct uart_port *port;
-	int id;
+	int id, ret;
 
+	neo_uart_dbg('P');  /* probe entry */
 	id = of_alias_get_id(pdev->dev.of_node, "serial");
 	if (id < 0 || id >= NEORV32_NR)
 		id = 0;
@@ -301,7 +360,11 @@ static int neorv32_probe(struct platform_device *pdev)
 
 	platform_set_drvdata(pdev, port);
 
-	return uart_add_one_port(&neorv32_uart_driver, port);
+	neo_uart_dbg('Q');  /* before uart_add_one_port */
+	ret = uart_add_one_port(&neorv32_uart_driver, port);
+	neo_uart_dbg('R');  /* after uart_add_one_port */
+	neo_uart_dbg('0' + ret);  /* return value */
+	return ret;
 }
 
 static int neorv32_remove(struct platform_device *pdev)
@@ -327,18 +390,31 @@ static struct platform_driver neorv32_platform_driver = {
 	},
 };
 
+/* Direct UART write for debug - bypasses console framework */
+static void neo_uart_dbg(char c)
+{
+	volatile unsigned int *ctrl = (volatile unsigned int *)0xfff50000;
+	volatile unsigned int *data = (volatile unsigned int *)0xfff50004;
+	while (!((*ctrl) & (1u << 19))) ;  /* wait TX_NFULL */
+	*data = c;
+}
+
 static int __init neorv32_uart_init(void)
 {
 	int ret;
 
+	neo_uart_dbg('(');  /* entering uart_init */
 	ret = uart_register_driver(&neorv32_uart_driver);
+	neo_uart_dbg('*');  /* uart_register_driver done */
 	if (ret)
 		return ret;
 
 	ret = platform_driver_register(&neorv32_platform_driver);
+	neo_uart_dbg('+');  /* platform_driver_register done */
 	if (ret)
 		uart_unregister_driver(&neorv32_uart_driver);
 
+	neo_uart_dbg(')');  /* uart_init returning */
 	return ret;
 }
 

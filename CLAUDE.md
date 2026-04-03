@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-This project boots nommu Linux (kernel 6.6.83) on a NEORV32 RV32IMC soft-core FPGA — the first known Linux boot on NEORV32. The NEORV32 has no MMU, no S-mode, and no atomic instructions. Getting Linux running required 22 kernel patches across arch/riscv, scheduler, RCU, init, and drivers.
+This project boots nommu Linux (kernel 6.6.83) on a NEORV32 RV32IMAC soft-core FPGA — the first known Linux boot on NEORV32. The NEORV32 has no MMU and no S-mode. Getting Linux running required 19 kernel patches across arch/riscv, scheduler, RCU, init, and drivers.
 
 Target hardware: Heijin AX301 board with Altera Cyclone IV EP4CE6 FPGA, 32 MB SDRAM, 50 MHz.
 
@@ -24,7 +24,7 @@ see_neorv32_run_linux/
 ├── linux-6.6.83.tar.xz     — Linux kernel tarball
 ├── rtl/                     — Custom RTL (ax301_top.vhd, sdram_ctrl.v, wb_sdram_ctrl.v)
 ├── quartus/                 — Quartus project (neorv32_demo.qsf/qpf/sdc)
-├── kernel/                  — neorv32_nommu.patch (22 kernel patches)
+├── kernel/                  — neorv32_nommu.patch (19 kernel patches)
 ├── board/                   — DTS, defconfig, UART driver, inject_driver.sh
 ├── sw/stage2_loader/        — Stage2 xmodem loader (C, must fit 8 KB)
 ├── sw/initramfs/            — Minimal init (C, builds neo_initramfs.cpio.gz)
@@ -89,7 +89,7 @@ cp neorv32_exe.bin ../../output/stage2_loader.bin
 # Extract kernel source (at repo root)
 tar xf linux-6.6.83.tar.xz
 
-# Apply nommu patches (22 patches)
+# Apply nommu patches (19 files modified)
 cd linux-6.6.83
 patch -p1 < ../kernel/neorv32_nommu.patch
 
@@ -175,9 +175,9 @@ python3 host/test_shell.py /dev/ttyUSB0
 - `0xFFF40000` — CLINT (timer), `0xFFF50000` — UART0
 
 ### Key technical decisions
-- **All atomics replaced with IRQ-disable/load/modify/store** — no LR/SC or AMO exists on this core. See `cmpxchg.h`, `atomic.h`, `bitops.h` in the kernel patch.
+- **Atomics use IRQ-disable/load/modify/store** — NEORV32 has Zaamo + Zalrsc enabled and AMO instructions work correctly (verified in userspace), but the kernel uses IRQ-disable atomics as a safer approach for single-core nommu. See `cmpxchg.h`, `atomic.h`, `bitops.h` in the kernel patch.
 - **Scheduler modified to single-shot `__schedule()`** — prevents infinite `need_resched` loops caused by non-atomic `test_and_clear` racing with timer interrupts. Safe because single-core.
-- **`wfi` replaced with `nop`** — NEORV32's wfi halts permanently if no interrupt pending.
+- **`wfi` is upstream (not patched)** — testing confirmed that `wfi` works correctly; the timer interrupt wakes the CPU as expected.
 - **RISCV_ALTERNATIVE disabled** — runtime instruction patching conflicts with non-atomic replacements; causes illegal instruction trap after `free_initmem()`.
 - **UART driver uses kthread polling** — no IRQ, no work queues (unreliable with modified scheduler). Direct line discipline delivery.
 - **RCU/async made synchronous** — `srcutiny` grace periods forced synchronous; `populate_rootfs()` called directly; `async_synchronize_full()` has 120s timeout.
@@ -190,7 +190,7 @@ The stage2 Makefile has this hardcoded; override with `RISCV_PREFIX`. Kernel use
 - Stage2 loader **must fit in 8 KB** IMEM (set via linker flags in Makefile)
 - The FPGA has only 6,272 LEs — no room for additional peripherals
 - SDRAM can intermittently fail on first power-on; power-cycle to resolve
-- The DTS advertises `riscv,isa-extensions = "a"` even though hardware has no atomics — this is intentional to satisfy kernel DT parsing requirements
+- The DTS advertises `riscv,isa-extensions = "a"` — NEORV32 does have hardware atomic support (Zaamo + Zalrsc). AMO instructions work correctly; the kernel uses IRQ-disable atomics by choice, not hardware limitation
 
 ## Known Pitfalls
 
@@ -203,5 +203,5 @@ The stage2 Makefile has this hardcoded; override with `RISCV_PREFIX`. Kernel use
 7. **boot_linux.py openFPGALoader path**: The script looks for `tools/openFPGALoader/build/openFPGALoader` relative to the repo root. If not found, use `--skip-program` and program the FPGA manually.
 8. **initramfs /init must be built with Linux toolchain as static-PIE**: The bare-metal `riscv-none-elf-gcc` does NOT support `-fpie`. Use the Buildroot Linux toolchain (`riscv32-buildroot-linux-gnu-gcc`). If init is built without PIE, the kernel will hang after "Run /init as init process" with no error message.
 9. **CONFIG_RISCV_ISA_V, CONFIG_FPU, CONFIG_RISCV_ISA_FALLBACK must be disabled**: The defconfig explicitly disables them. NEORV32 has no FPU — `CONFIG_FPU=y` causes the kernel to hang after `free_initmem()` due to illegal instruction traps. Always verify with `grep -E 'RISCV_ISA_V|FPU|ISA_FALLBACK' .config` after `make defconfig`.
-10. **Kernel size must be close to 1,451,452 bytes**: If the Image is significantly larger (>1.48 MB), unwanted features got auto-enabled. Check the config items in pitfall #9.
+10. **Kernel size must be close to 1,513,100 bytes**: If the Image is significantly larger (>1.55 MB), unwanted features got auto-enabled. Check the config items in pitfall #9.
 11. **Kernel compiler: xPack riscv-none-elf-gcc 14.2.0 only**: Buildroot's `riscv32-buildroot-linux-gnu-gcc` 12.4.0 compiles the kernel without errors, but the resulting Image hangs at `free_initmem()` on NEORV32 hardware. Both compilers produce identical instruction-level kernel_init flow, and both leave exactly 8 AMO/LR/SC instructions in the binary (in unused futex/fallback paths). The hang is caused by a subtle code generation difference in GCC 12.4.0. Do NOT substitute compilers for the kernel build.

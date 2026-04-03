@@ -102,10 +102,83 @@ static void cmd_info(void) {
     }
 }
 
+static void my_puthex(unsigned long v) {
+    char buf[12];
+    int i;
+    buf[0] = '0'; buf[1] = 'x';
+    for (i = 0; i < 8; i++)
+        buf[2+i] = "0123456789abcdef"[(v >> (28 - i*4)) & 0xf];
+    buf[10] = 0;
+    my_puts(buf);
+}
+
+static void cmd_amo(void) {
+    volatile int val __attribute__((aligned(4)));
+    int result, tmp;
+    int pass = 0, fail = 0;
+
+    my_puts("=== AMO / LR/SC test ===\n");
+
+    /* Test 1: amoadd.w */
+    val = 100;
+    __asm__ volatile("amoadd.w %0, %1, (%2)"
+        : "=r"(result) : "r"(50), "r"(&val) : "memory");
+    my_puts("amoadd.w: old="); my_puthex(result);
+    my_puts(" new="); my_puthex(val); my_puts("\n");
+    if (result == 100 && val == 150) { my_puts("  [PASS]\n"); pass++; }
+    else { my_puts("  [FAIL]\n"); fail++; }
+
+    /* Test 2: amoswap.w */
+    val = 0xDEAD;
+    __asm__ volatile("amoswap.w %0, %1, (%2)"
+        : "=r"(result) : "r"(0xBEEF), "r"(&val) : "memory");
+    my_puts("amoswap.w: old="); my_puthex(result);
+    my_puts(" new="); my_puthex(val); my_puts("\n");
+    if (result == 0xDEAD && val == 0xBEEF) { my_puts("  [PASS]\n"); pass++; }
+    else { my_puts("  [FAIL]\n"); fail++; }
+
+    /* Test 3: amoor.w */
+    val = 0xF0;
+    __asm__ volatile("amoor.w %0, %1, (%2)"
+        : "=r"(result) : "r"(0x0F), "r"(&val) : "memory");
+    my_puts("amoor.w: old="); my_puthex(result);
+    my_puts(" new="); my_puthex(val); my_puts("\n");
+    if (result == 0xF0 && val == 0xFF) { my_puts("  [PASS]\n"); pass++; }
+    else { my_puts("  [FAIL]\n"); fail++; }
+
+    /* Test 4: amoand.w */
+    val = 0xFF;
+    __asm__ volatile("amoand.w %0, %1, (%2)"
+        : "=r"(result) : "r"(0x0F), "r"(&val) : "memory");
+    my_puts("amoand.w: old="); my_puthex(result);
+    my_puts(" new="); my_puthex(val); my_puts("\n");
+    if (result == 0xFF && val == 0x0F) { my_puts("  [PASS]\n"); pass++; }
+    else { my_puts("  [FAIL]\n"); fail++; }
+
+    /* Test 5: lr.w / sc.w */
+    val = 42;
+    __asm__ volatile(
+        "lr.w %0, (%2)\n"
+        "sc.w %1, %3, (%2)\n"
+        : "=&r"(result), "=&r"(tmp)
+        : "r"(&val), "r"(99)
+        : "memory");
+    my_puts("lr.w/sc.w: old="); my_puthex(result);
+    my_puts(" sc="); my_puthex(tmp);
+    my_puts(" new="); my_puthex(val); my_puts("\n");
+    if (result == 42 && tmp == 0 && val == 99) { my_puts("  [PASS]\n"); pass++; }
+    else { my_puts("  [FAIL]\n"); fail++; }
+
+    my_puts("Result: ");
+    my_putnum(pass); my_puts("/"); my_putnum(pass + fail);
+    my_puts(pass + fail == pass ? " ALL PASSED\n" : " SOME FAILED\n");
+}
+
 static void cmd_help(void) {
     my_puts("Commands:\n");
     my_puts("  uname  - kernel info\n");
     my_puts("  info   - memory & uptime\n");
+    my_puts("  amo    - test AMO/LR/SC instructions\n");
     my_puts("  help   - this message\n");
     my_puts("  exit   - halt system\n");
 }
@@ -133,6 +206,7 @@ void _start(void) {
 
         if (my_strcmp(buf, "uname") == 0) cmd_uname();
         else if (my_strcmp(buf, "info") == 0) cmd_info();
+        else if (my_strcmp(buf, "amo") == 0) cmd_amo();
         else if (my_strcmp(buf, "help") == 0) cmd_help();
         else if (my_strcmp(buf, "exit") == 0) break;
         else { my_puts("unknown: "); my_puts(buf); my_puts("\n"); }

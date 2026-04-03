@@ -2,7 +2,7 @@
 
 Booting nommu Linux (kernel 6.6.83) on a **NEORV32** RV32IMAC soft-core FPGA — believed to be the first successful Linux boot on NEORV32.
 
-The NEORV32 is a microcontroller-class processor with **no MMU** and **no S-mode**. Getting Linux to run on it required 17 patches across the kernel's arch/riscv, scheduler, RCU, init, and driver subsystems.
+The NEORV32 is a microcontroller-class processor with **no MMU** and **no S-mode**. Getting Linux to run on it required 19 patches across the kernel's arch/riscv, scheduler, RCU, init, and driver subsystems.
 
 **Demo video:** https://youtu.be/JC6qNcMIWf8
 
@@ -269,11 +269,9 @@ The kernel scheduler's `need_resched` loop assumes preemption works at all point
 
 **Solution:** Modified `schedule()` and `preempt_schedule_common()` to execute `__schedule()` exactly once instead of looping on `need_resched`. Added `schedule_preempt_disabled_once()` for kthread startup.
 
-### 3. `wfi` Halts the CPU
+### 3. ~~`wfi` Halts the CPU~~ (Resolved)
 
-The RISC-V `wfi` (wait-for-interrupt) instruction halts the CPU until an interrupt arrives. In M-mode nommu with a polling TTY driver and timer-only IRQs, the CPU can freeze permanently if `wfi` is reached with no pending interrupt source.
-
-**Solution:** `wfi` → `nop` in `arch/riscv/include/asm/processor.h`. This is a conservative workaround; `wfi` itself is standard RISC-V behavior.
+Initially we replaced `wfi` with `nop`, but testing confirmed that `wfi` works correctly — the timer interrupt wakes the CPU as expected. The upstream `wfi` instruction is now restored.
 
 ### 4. RISCV_ALTERNATIVE Patching Conflict
 
@@ -293,16 +291,18 @@ NEORV32's UART is not supported by any upstream Linux driver. We wrote a custom 
 
 ## Kernel Patches
 
-All patches are in `kernel/neorv32_nommu.patch` (1,126 lines, 17 files against vanilla 6.6.83).
+All patches are in `kernel/neorv32_nommu.patch` (1,126 lines, 19 files against vanilla 6.6.83).
 
-**Note:** NEORV32 supports the A extension (Zaamo + Zalrsc). LR/SC reservation is CPU-internal — the Wishbone bus sees only normal load/store — so native atomics work correctly even through external SDRAM. No atomic instruction patches are needed.
+**Note on atomics:** The kernel uses IRQ-disable based atomic operations (`atomic.h`, `cmpxchg.h`, `bitops.h`) instead of native AMO/LR/SC instructions. While NEORV32 has Zaamo + Zalrsc enabled in hardware, and AMO instructions (amoadd, amoswap, amoor, amoand) work correctly in userspace testing, the kernel currently uses the safer IRQ-disable approach. This is functionally correct for single-core nommu operation.
 
 ### Files Modified
 
 | File | Change |
 |------|--------|
 | `arch/riscv/Kconfig` | Disable `RISCV_ALTERNATIVE` |
-| `arch/riscv/include/asm/processor.h` | `wfi` → `nop` |
+| `arch/riscv/include/asm/atomic.h` | IRQ-disable atomics (replaces AMO instructions) |
+| `arch/riscv/include/asm/cmpxchg.h` | IRQ-disable cmpxchg (replaces LR/SC) |
+| `arch/riscv/include/asm/bitops.h` | IRQ-disable bitops (replaces atomic bit operations) |
 | `arch/riscv/kernel/traps.c` | M-mode trap handling adjustments |
 | `kernel/sched/core.c` | Single-shot `__schedule()`, no `need_resched` loop |
 | `kernel/sched/rt.c` | RT scheduler adjustments for nommu |

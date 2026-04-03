@@ -38,9 +38,6 @@ CONFIG_NONPORTABLE=y
 # CONFIG_SMP is not set
 CONFIG_RISCV_ISA_C=y
 CONFIG_RISCV_ISA_M=y
-# CONFIG_RISCV_ISA_V is not set
-# CONFIG_FPU is not set
-# CONFIG_RISCV_ISA_FALLBACK is not set
 
 # ── Memory: SDRAM at 0x40000000, 32 MB ──
 CONFIG_PHYS_RAM_BASE_FIXED=y
@@ -64,7 +61,8 @@ CONFIG_BINFMT_ELF_FDPIC=y
 # CONFIG_COREDUMP is not set
 
 # ── Device infrastructure ──
-# CONFIG_DEVTMPFS is not set
+CONFIG_DEVTMPFS=y
+CONFIG_DEVTMPFS_MOUNT=y
 # CONFIG_FW_LOADER is not set
 # CONFIG_ALLOW_DEV_COREDUMP is not set
 
@@ -89,7 +87,6 @@ CONFIG_SERIAL_OF_PLATFORM=y
 # CONFIG_HW_RANDOM is not set
 # CONFIG_DEVMEM is not set
 # CONFIG_HWMON is not set
-# CONFIG_VT is not set
 # CONFIG_VGA_CONSOLE is not set
 # CONFIG_HID is not set
 # CONFIG_USB_SUPPORT is not set
