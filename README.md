@@ -2,7 +2,9 @@
 
 Booting nommu Linux (kernel 6.6.83) on a **NEORV32** RV32IMAC soft-core FPGA — believed to be the first successful Linux boot on NEORV32.
 
-The NEORV32 is a microcontroller-class processor with **no MMU** and **no S-mode**. Getting Linux to run on it required 19 patches across the kernel's arch/riscv, scheduler, RCU, init, and driver subsystems.
+The NEORV32 is a microcontroller-class processor with **no MMU** and **no S-mode**. Getting Linux to run on it required 16 patches across the kernel's arch/riscv, scheduler, RCU, init, and driver subsystems.
+
+We also discovered and fixed a [bug in NEORV32's SC.W instruction](https://github.com/stnolting/neorv32/pull/1520) — the store-conditional was returning stale data instead of a success/failure status code. This fix enables the kernel to use native RISC-V atomic instructions (LR/SC + AMO).
 
 **Demo video:** https://youtu.be/JC6qNcMIWf8
 
@@ -39,36 +41,35 @@ Then paste the contents of `init_prompt.txt` as your first message. Claude Code 
 
 ```
 [stage2] Linux direct boot mode
-[4] Sending kernel (1,451,452 bytes) via xmodem...
+[4] Sending kernel (1,513,100 bytes) via xmodem...
   [xmodem] Transfer complete
   [kernel] CRC MATCH: xxxxxxxx ✓
 ...
 [    0.000000] Linux version 6.6.83 (riscv32)
 [    0.000000] Kernel command line: earlycon=neorv32,0xfff50000 console=ttyNEO0,115200
-[    0.000000] Memory: 30972K/32768K available (1035K kernel code, ...)
-[   86.283041] printk: console [ttyNEO0] enabled
-[  118.106999] Freeing unused kernel image (initmem) memory: 96K
-[  118.219101] Run /init as init process
+[    0.000000] Memory: 30908K/32768K available (1076K kernel code, ...)
+[   85.896116] printk: console [ttyNEO0] enabled
+[   98.580187] Run /init as init process
 
 ========================================
  NEORV32 nommu Linux — mini shell
 ========================================
 Linux (none) 6.6.83 riscv32
-Uptime:    118 s
-Total RAM: 31068 KB
-Free RAM:  30548 KB
-Processes: 13
+Uptime:    97 s
+Total RAM: 31004 KB
+Free RAM:  30264 KB
+Processes: 14
 
 Type 'help' for commands.
 
-nommu# uname
-Linux (none) 6.6.83-g7d6073865396-dirty #105 riscv32
-
-nommu# info
-Uptime:    310 s
-Total RAM: 31068 KB
-Free RAM:  30548 KB
-Processes: 13
+nommu# amo
+=== AMO test (Zaamo) ===
+amoadd.w: old=0x00000064 new=0x00000096   [PASS]
+...
+=== LR/SC detailed tests ===
+A) basic: lr=0x0000002a sc.rd=0x00000000 mem=0x00000063   [PASS]
+...
+Result: 11/11 ALL PASSED
 ```
 
 ## Build from Source
@@ -201,12 +202,12 @@ Power on → NEORV32 internal bootloader (19200 baud, ROM at 0xFFE00000)
   ↓ execute → UART switches to 115200 baud
 Stage2 loader (IMEM, 115200 baud)
   ↓ 'l' → Linux direct boot mode
-  ↓ xmodem: kernel Image (1.4 MB) → SDRAM 0x40000000, CRC-32 verify
+  ↓ xmodem: kernel Image (1.5 MB) → SDRAM 0x40000000, CRC-32 verify
   ↓ xmodem: DTB (1.4 KB)          → SDRAM 0x41F00000, CRC-32 verify
-  ↓ xmodem: initramfs (1.7 KB)    → SDRAM 0x41F80000, CRC-32 verify
+  ↓ xmodem: initramfs (2.9 KB)    → SDRAM 0x41F80000, CRC-32 verify
   ↓ jump to 0x40000000 with a0=hartid, a1=DTB pointer
 Linux kernel (M-mode, nommu)
-  ↓ ~118s boot → /init (mini shell from initramfs)
+  ↓ ~98s boot → /init (mini shell from initramfs)
 ```
 
 ### FPGA Memory Map
@@ -250,8 +251,8 @@ After boot, the 32 MB SDRAM at `0x40000000` is used as follows:
 
 **Key runtime numbers** (from kernel log):
 - Total RAM: 32,768 KB (32 MB)
-- Available after boot: 30,972 KB (~30 MB free)
-- Kernel code: 1,035 KB | RW data: 125 KB | RO data: 155 KB | Init: 96 KB | BSS: 49 KB
+- Available after boot: 30,908 KB (~30 MB free)
+- Kernel code: 1,076 KB | RW data: 137 KB | RO data: 160 KB | Init: 99 KB | BSS: 52 KB
 
 ## Why Is This Hard?
 
@@ -291,18 +292,15 @@ NEORV32's UART is not supported by any upstream Linux driver. We wrote a custom 
 
 ## Kernel Patches
 
-All patches are in `kernel/neorv32_nommu.patch` (1,126 lines, 19 files against vanilla 6.6.83).
+All patches are in `kernel/neorv32_nommu.patch` (16 files against vanilla 6.6.83).
 
-**Note on atomics:** The kernel uses IRQ-disable based atomic operations (`atomic.h`, `cmpxchg.h`, `bitops.h`) instead of native AMO/LR/SC instructions. While NEORV32 has Zaamo + Zalrsc enabled in hardware, and AMO instructions (amoadd, amoswap, amoor, amoand) work correctly in userspace testing, the kernel currently uses the safer IRQ-disable approach. This is functionally correct for single-core nommu operation.
+**Atomics:** The kernel uses **native RISC-V atomic instructions** (AMO + LR/SC). This was made possible by finding and fixing a [bug in NEORV32's SC.W instruction](https://github.com/stnolting/neorv32/pull/1520) — the store-conditional was returning the value loaded by LR.W in rd instead of 0 (success). The fix adds a `sc_pend` signal to `neorv32_bus_amo_rvs` that overrides the response data correctly. All 11 userspace LR/SC tests pass, and the kernel boots with 810 atomic instructions.
 
 ### Files Modified
 
 | File | Change |
 |------|--------|
 | `arch/riscv/Kconfig` | Disable `RISCV_ALTERNATIVE` |
-| `arch/riscv/include/asm/atomic.h` | IRQ-disable atomics (replaces AMO instructions) |
-| `arch/riscv/include/asm/cmpxchg.h` | IRQ-disable cmpxchg (replaces LR/SC) |
-| `arch/riscv/include/asm/bitops.h` | IRQ-disable bitops (replaces atomic bit operations) |
 | `arch/riscv/kernel/traps.c` | M-mode trap handling adjustments |
 | `kernel/sched/core.c` | Single-shot `__schedule()`, no `need_resched` loop |
 | `kernel/sched/rt.c` | RT scheduler adjustments for nommu |
@@ -350,7 +348,7 @@ see_neorv32_run_linux/
 │   └── sdram_ctrl.v       — SDRAM controller FSM (CL=3, 50 MHz)
 ├── quartus/               — Quartus project files (.qsf, .qpf, .sdc)
 ├── kernel/
-│   └── neorv32_nommu.patch — 22 kernel patches (vs vanilla 6.6.83)
+│   └── neorv32_nommu.patch — 16 kernel patches (vs vanilla 6.6.83)
 ├── board/                 — Board support files
 │   ├── neorv32_ax301.dts   — device tree source
 │   ├── linux_defconfig     — kernel config
@@ -375,17 +373,17 @@ see_neorv32_run_linux/
 
 | Resource | Used | Available | % |
 |----------|------|-----------|---|
-| Logic Elements | 4,592 | 6,272 | 73% |
+| Logic Elements | 4,600 | 6,272 | 73% |
 | Memory bits | 168,960 | 276,480 | 61% |
-| Registers | 2,354 | 6,272 | 38% |
+| Registers | 2,408 | 6,272 | 38% |
 | Embedded Multipliers | 0 | 30 | 0% |
 
 ## Known Issues
 
 - **Kernel must be built with xPack `riscv-none-elf-gcc` 14.2.0:** Building the kernel with Buildroot's `riscv32-buildroot-linux-gnu-gcc` 12.4.0 produces a binary that hangs in `free_initmem()` — the last debug marker `L` (system_state = RUNNING) prints, but execution never reaches `M` (after free_initmem). This happens despite identical source code, patches, kernel config, and FPGA bitstream. The only variable is the compiler. Root cause is a subtle code generation difference in GCC 12.4.0 that triggers a hang on NEORV32's constrained environment. The Buildroot-built kernel also runs noticeably slower overall (clocksource switch at 13.8s vs 7.4s, triggers `sched: RT throttling activated`). **Always use the xPack bare-metal toolchain for the kernel.**
-- **Boot time ~118s:** Mostly spent in driver probing and async work queue timeouts. The 50 MHz single-issue core is genuinely slow for kernel init.
+- **Boot time ~98s:** Mostly spent in driver probing and async work queue timeouts. The 50 MHz single-issue core is genuinely slow for kernel init.
 - **SDRAM intermittent init failure:** Occasionally fails on first power-on. Power-cycle the board (off for a few seconds) to resolve.
-- **Shell is minimal:** Only `uname`, `info`, `help`, `exit`. The init binary is a custom C program, not busybox (to keep initramfs tiny).
+- **Shell is minimal:** Only `uname`, `info`, `amo`, `help`, `exit`. The init binary is a custom C program, not busybox (to keep initramfs tiny).
 - **No network, no storage:** This is a bare UART console. The EP4CE6 has no room for additional peripherals.
 
 ## License

@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-This project boots nommu Linux (kernel 6.6.83) on a NEORV32 RV32IMAC soft-core FPGA — the first known Linux boot on NEORV32. The NEORV32 has no MMU and no S-mode. Getting Linux running required 19 kernel patches across arch/riscv, scheduler, RCU, init, and drivers.
+This project boots nommu Linux (kernel 6.6.83) on a NEORV32 RV32IMAC soft-core FPGA — the first known Linux boot on NEORV32. The NEORV32 has no MMU and no S-mode. Getting Linux running required 16 kernel patches across arch/riscv, scheduler, RCU, init, and drivers. We also found and fixed a [SC.W return value bug](https://github.com/stnolting/neorv32/pull/1520) in NEORV32's bus reservation station, enabling native atomic instructions in the kernel.
 
 Target hardware: Heijin AX301 board with Altera Cyclone IV EP4CE6 FPGA, 32 MB SDRAM, 50 MHz.
 
@@ -24,7 +24,7 @@ see_neorv32_run_linux/
 ├── linux-6.6.83.tar.xz     — Linux kernel tarball
 ├── rtl/                     — Custom RTL (ax301_top.vhd, sdram_ctrl.v, wb_sdram_ctrl.v)
 ├── quartus/                 — Quartus project (neorv32_demo.qsf/qpf/sdc)
-├── kernel/                  — neorv32_nommu.patch (19 kernel patches)
+├── kernel/                  — neorv32_nommu.patch (16 kernel patches)
 ├── board/                   — DTS, defconfig, UART driver, inject_driver.sh
 ├── sw/stage2_loader/        — Stage2 xmodem loader (C, must fit 8 KB)
 ├── sw/initramfs/            — Minimal init (C, builds neo_initramfs.cpio.gz)
@@ -139,16 +139,16 @@ python3 host/boot_linux.py --port /dev/ttyUSB0
 
 ### Expected output
 
-After ~139s of xmodem transfer + ~118s of kernel boot = ~257s total:
+After ~145s of xmodem transfer + ~98s of kernel boot = ~243s total:
 ```
 ========================================
  NEORV32 nommu Linux — mini shell
 ========================================
 Linux (none) 6.6.83-... riscv32
-Uptime:    118 s
-Total RAM: 31068 KB
-Free RAM:  30548 KB
-Processes: 13
+Uptime:    97 s
+Total RAM: 31004 KB
+Free RAM:  30264 KB
+Processes: 14
 
 Type 'help' for commands.
 
@@ -175,7 +175,7 @@ python3 host/test_shell.py /dev/ttyUSB0
 - `0xFFF40000` — CLINT (timer), `0xFFF50000` — UART0
 
 ### Key technical decisions
-- **Atomics use IRQ-disable/load/modify/store** — NEORV32 has Zaamo + Zalrsc enabled and AMO instructions work correctly (verified in userspace), but the kernel uses IRQ-disable atomics as a safer approach for single-core nommu. See `cmpxchg.h`, `atomic.h`, `bitops.h` in the kernel patch.
+- **Atomics use native RISC-V instructions** — NEORV32 has Zaamo + Zalrsc enabled. After fixing a [SC.W return value bug](https://github.com/stnolting/neorv32/pull/1520) in the RTL, the kernel uses upstream unmodified `cmpxchg.h`, `atomic.h` with native LR/SC and AMO instructions (810 atomic instructions in the kernel binary). Verified with 11 userspace LR/SC tests.
 - **Scheduler modified to single-shot `__schedule()`** — prevents infinite `need_resched` loops caused by non-atomic `test_and_clear` racing with timer interrupts. Safe because single-core.
 - **`wfi` is upstream (not patched)** — testing confirmed that `wfi` works correctly; the timer interrupt wakes the CPU as expected.
 - **RISCV_ALTERNATIVE disabled** — runtime instruction patching conflicts with non-atomic replacements; causes illegal instruction trap after `free_initmem()`.
@@ -190,7 +190,7 @@ The stage2 Makefile has this hardcoded; override with `RISCV_PREFIX`. Kernel use
 - Stage2 loader **must fit in 8 KB** IMEM (set via linker flags in Makefile)
 - The FPGA has only 6,272 LEs — no room for additional peripherals
 - SDRAM can intermittently fail on first power-on; power-cycle to resolve
-- The DTS advertises `riscv,isa-extensions = "a"` — NEORV32 does have hardware atomic support (Zaamo + Zalrsc). AMO instructions work correctly; the kernel uses IRQ-disable atomics by choice, not hardware limitation
+- The DTS advertises `riscv,isa-extensions = "a"` — NEORV32 has hardware atomic support (Zaamo + Zalrsc). The kernel uses native AMO/LR/SC instructions after a [SC.W RTL bug fix](https://github.com/stnolting/neorv32/pull/1520)
 
 ## Known Pitfalls
 
@@ -204,4 +204,4 @@ The stage2 Makefile has this hardcoded; override with `RISCV_PREFIX`. Kernel use
 8. **initramfs /init must be built with Linux toolchain as static-PIE**: The bare-metal `riscv-none-elf-gcc` does NOT support `-fpie`. Use the Buildroot Linux toolchain (`riscv32-buildroot-linux-gnu-gcc`). If init is built without PIE, the kernel will hang after "Run /init as init process" with no error message.
 9. **CONFIG_RISCV_ISA_V, CONFIG_FPU, CONFIG_RISCV_ISA_FALLBACK must be disabled**: The defconfig explicitly disables them. NEORV32 has no FPU — `CONFIG_FPU=y` causes the kernel to hang after `free_initmem()` due to illegal instruction traps. Always verify with `grep -E 'RISCV_ISA_V|FPU|ISA_FALLBACK' .config` after `make defconfig`.
 10. **Kernel size must be close to 1,513,100 bytes**: If the Image is significantly larger (>1.55 MB), unwanted features got auto-enabled. Check the config items in pitfall #9.
-11. **Kernel compiler: xPack riscv-none-elf-gcc 14.2.0 only**: Buildroot's `riscv32-buildroot-linux-gnu-gcc` 12.4.0 compiles the kernel without errors, but the resulting Image hangs at `free_initmem()` on NEORV32 hardware. Both compilers produce identical instruction-level kernel_init flow, and both leave exactly 8 AMO/LR/SC instructions in the binary (in unused futex/fallback paths). The hang is caused by a subtle code generation difference in GCC 12.4.0. Do NOT substitute compilers for the kernel build.
+11. **Kernel compiler: xPack riscv-none-elf-gcc 14.2.0 only**: Buildroot's `riscv32-buildroot-linux-gnu-gcc` 12.4.0 compiles the kernel without errors, but the resulting Image hangs at `free_initmem()` on NEORV32 hardware. The hang is caused by a subtle code generation difference in GCC 12.4.0. Do NOT substitute compilers for the kernel build.
