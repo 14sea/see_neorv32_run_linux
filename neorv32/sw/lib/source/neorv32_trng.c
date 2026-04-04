@@ -1,7 +1,7 @@
 // ================================================================================ //
 // The NEORV32 RISC-V Processor - https://github.com/stnolting/neorv32              //
 // Copyright (c) NEORV32 contributors.                                              //
-// Copyright (c) 2020 - 2025 Stephan Nolting. All rights reserved.                  //
+// Copyright (c) 2020 - 2026 Stephan Nolting. All rights reserved.                  //
 // Licensed under the BSD-3-Clause license, see LICENSE for details.                //
 // SPDX-License-Identifier: BSD-3-Clause                                            //
 // ================================================================================ //
@@ -56,12 +56,12 @@ void neorv32_trng_disable(void) {
  **************************************************************************/
 void neorv32_trng_fifo_clear(void) {
 
-  NEORV32_TRNG->CTRL |= 1 << TRNG_CTRL_FIFO_CLR; // bit auto clears
+  __MMREG32_BSET(NEORV32_TRNG->CTRL, 1 << TRNG_CTRL_FIFO_CLR);
 }
 
 
 /**********************************************************************//**
- * Get TRNG FIFO depth.
+ * Get TRNG configuration: FIFO depth.
  *
  * @return TRNG FIFO size (number of entries).
  **************************************************************************/
@@ -69,6 +69,40 @@ int neorv32_trng_get_fifo_depth(void) {
 
   uint32_t tmp = (NEORV32_TRNG->CTRL >> TRNG_CTRL_FIFO_LSB) & 0x0f;
   return (int)(1 << tmp);
+}
+
+
+/**********************************************************************//**
+ * Get TRNG configuration: Number of raw bits processed for one output byte.
+ *
+ * @return Number of raw bits per output sample.
+ **************************************************************************/
+int neorv32_trng_get_num_raw_bits(void) {
+
+  uint32_t tmp = (NEORV32_TRNG->CTRL >> TRNG_CTRL_NBIT_LSB) & 0x0f;
+  return (int)(1 << tmp);
+}
+
+
+/**********************************************************************//**
+ * Get TRNG configuration: Total number of ring-oscillators.
+ *
+ * @return Number of ring-oscillators.
+ **************************************************************************/
+int neorv32_trng_get_num_ros(void) {
+
+  return (int)((NEORV32_TRNG->CTRL >> TRNG_CTRL_NRO_LSB) & 0xff);
+}
+
+
+/**********************************************************************//**
+ * Get TRNG configuration: Number if inverters in first ring-oscillator.
+ *
+ * @return Number if inverters in first ring-oscillator.
+ **************************************************************************/
+int neorv32_trng_get_num_inv(void) {
+
+  return (int)((NEORV32_TRNG->CTRL >> TRNG_CTRL_NINV_LSB) & 0xfff);
 }
 
 

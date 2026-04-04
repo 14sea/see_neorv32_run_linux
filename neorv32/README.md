@@ -34,6 +34,7 @@ targeting various FPGA boards and toolchains to get started.
 * :package: The entire processor is also available as [Vivado IP Block](https://stnolting.github.io/neorv32/ug/#_packaging_the_processor_as_vivado_ip_block).
 * :kite: Upstream [Zephyr](https://docs.zephyrproject.org/latest/boards/others/neorv32/doc/index.html) and
 [FreeRTOS](https://github.com/stnolting/neorv32-freertos) operating system support.
+* :penguin: Capable of [running nommu-Linux](https://github.com/14sea/see_neorv32_run_linux).
 * :building_construction: [LiteX](https://github.com/enjoy-digital/litex/wiki/CPUs#risc-v---neorv32) SoC builder integration.
 * :gear: [MicroPython](https://github.com/stnolting/neorv32-micropython) port, [Ada](https://github.com/GNAT-Academic-Program/neorv32-hal) support, and
 [Rust](https://crates.io/crates/embassy-neorv32) integration via Embassy framework.
@@ -239,6 +240,13 @@ This is an open-source project that is free of charge and provided under an
 permissive [license](https://github.com/stnolting/neorv32/blob/main/LICENSE).
 See the [legal](https://stnolting.github.io/neorv32/#_legal) section for more information.
 
----------------------------------------
 
-**:heart: A big shout-out to the community and all the [contributors](https://github.com/stnolting/neorv32/graphs/contributors)!**
+## Contributing
+
+Contributions are very welcome! If you’d like to improve something, fix a bug, or add a feature,
+feel free to open an issue or submit a pull request. See how to [contribute](CONTRIBUTING.md).
+A big **thank you** goes out to the community and all contributors who help improve this project:
+
+<a href="https://github.com/stnolting/neorv32/graphs/contributors">
+  <img src="https://contrib.rocks/image?repo=stnolting/neorv32" />
+</a>

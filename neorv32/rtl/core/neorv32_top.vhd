@@ -100,44 +100,76 @@ entity neorv32_top is
     CACHE_BLOCK_SIZE    : natural range 4 to 1024        := 64;            -- i-cache/d-cache: block size in bytes, has to be a power of 2
     CACHE_BURSTS_EN     : boolean                        := true;          -- i-cache/d-cache: enable issuing of burst transfer for cache update
 
-    -- External bus interface (XBUS) --
-    XBUS_EN             : boolean                        := false;         -- implement external memory bus interface
+    -- External Bus Interface (XBUS) --
+    XBUS_EN             : boolean                        := false;         -- implement external bus interface
     XBUS_TIMEOUT        : natural                        := 2048;          -- cycles after a pending bus access auto-terminates (0 = disabled)
     XBUS_REGSTAGE_EN    : boolean                        := false;         -- add XBUS register stage
 
-    -- Processor peripherals --
+    -- General-Purpose Input/Output Controller (GPIO) --
     IO_GPIO_NUM         : natural range 0 to 32          := 0;             -- number of GPIO input/output pairs
+    IO_GPIO_DIR_EN      : boolean                        := false;         -- enable GPIO direction control port
+
+    -- RISC-V Core-Local Interruptor (CLINT) --
     IO_CLINT_EN         : boolean                        := false;         -- implement core local interruptor (CLINT)
+
+    -- Universal Asynchronous Receiver/Transmitter (UART0/UART1) --
     IO_UART0_EN         : boolean                        := false;         -- implement primary universal asynchronous receiver/transmitter (UART0)
     IO_UART0_RX_FIFO    : natural range 1 to 2**15       := 1;             -- RX FIFO depth, has to be a power of two
     IO_UART0_TX_FIFO    : natural range 1 to 2**15       := 1;             -- TX FIFO depth, has to be a power of two
     IO_UART1_EN         : boolean                        := false;         -- implement secondary universal asynchronous receiver/transmitter (UART1)
     IO_UART1_RX_FIFO    : natural range 1 to 2**15       := 1;             -- RX FIFO depth, has to be a power of two
     IO_UART1_TX_FIFO    : natural range 1 to 2**15       := 1;             -- TX FIFO depth, has to be a power of two
+
+    -- Serial Peripheral Interface (SPI Host, SDI Device) --
     IO_SPI_EN           : boolean                        := false;         -- implement serial peripheral interface (SPI)
     IO_SPI_FIFO         : natural range 1 to 2**15       := 1;             -- RTX FIFO depth, has to be a power of two
     IO_SDI_EN           : boolean                        := false;         -- implement serial data interface (SDI)
     IO_SDI_FIFO         : natural range 1 to 2**15       := 1;             -- RTX FIFO depth, has to be zero or a power of two
+
+    -- Two-Wire Interface (TWI Host, TWD Device) --
     IO_TWI_EN           : boolean                        := false;         -- implement two-wire interface (TWI)
     IO_TWI_FIFO         : natural range 1 to 2**15       := 1;             -- RTX FIFO depth, has to be zero or a power of two
     IO_TWD_EN           : boolean                        := false;         -- implement two-wire device (TWD)
     IO_TWD_RX_FIFO      : natural range 1 to 2**15       := 1;             -- TX FIFO depth, has to be zero or a power of two
     IO_TWD_TX_FIFO      : natural range 1 to 2**15       := 1;             -- RX FIFO depth, has to be zero or a power of two
+
+    -- Pulse-Width Modulation Controller (PWM) --
     IO_PWM_NUM          : natural range 0 to 32          := 0;             -- number of PWM channels to implement
+
+    -- Watchdog Timer (WDT) --
     IO_WDT_EN           : boolean                        := false;         -- implement watch dog timer (WDT)
+
+    -- True-Random Number Generator (TRNG) --
     IO_TRNG_EN          : boolean                        := false;         -- implement true random number generator (TRNG)
     IO_TRNG_FIFO        : natural range 1 to 2**15       := 1;             -- data FIFO depth, has to be a power of two
+    IO_TRNG_NUM_RO      : natural range 1 to 255         := 3;             -- total number of ring-oscillators
+    IO_TRNG_NUM_INV     : natural range 3 to 4095        := 5;             -- number of inverters in first ring-oscillator; has to be odd
+    IO_TRNG_NUM_RBIT    : natural range 1 to 4096        := 64;            -- number of raw bits to process for one output byte; has to be power of two
+
+    -- True-Random Number Generator (TRNG) --
     IO_CFS_EN           : boolean                        := false;         -- implement custom functions subsystem (CFS)
+
+    -- Smart LED interface (NEOLED) --
     IO_NEOLED_EN        : boolean                        := false;         -- implement NeoPixel-compatible smart LED interface (NEOLED)
     IO_NEOLED_TX_FIFO   : natural range 1 to 2**15       := 1;             -- NEOLED FIFO depth, has to be a power of two
+
+    -- General-Purpose Timer (GPTMR) --
     IO_GPTMR_NUM        : natural range 0 to 16          := 0;             -- number of GPTMR timer slices to implement (0..16)
+
+    -- 1-Wire Interface (ONEWIRE) --
     IO_ONEWIRE_EN       : boolean                        := false;         -- implement 1-wire interface (ONEWIRE)
     IO_ONEWIRE_FIFO     : natural range 1 to 2**15       := 1;             -- RTX FIFO depth, has to be zero or a power of two
+
+    -- Direct Memory Access Controller (DMA) --
     IO_DMA_EN           : boolean                        := false;         -- implement direct memory access controller (DMA)
     IO_DMA_DSC_FIFO     : natural range 4 to 512         := 4;             -- DMA descriptor FIFO depth, has to be a power of two
+
+    -- Stream Link Interface (SLINK) --
     IO_SLINK_EN         : boolean                        := false;         -- implement stream link interface (SLINK)
     IO_SLINK_RX_FIFO    : natural range 1 to 2**15       := 1;             -- RX FIFO depth, has to be a power of two
     IO_SLINK_TX_FIFO    : natural range 1 to 2**15       := 1;             -- TX FIFO depth, has to be a power of two
+
+    -- Instruction Tracer (TRACER) --
     IO_TRACER_EN        : boolean                        := false;         -- implement instruction tracer
     IO_TRACER_BUFFER    : natural range 1 to 2**15       := 1;             -- trace buffer depth, has to be a power of two
     IO_TRACER_SIMLOG_EN : boolean                        := false          -- write full trace log to file (simulation-only)
@@ -185,6 +217,7 @@ entity neorv32_top is
     slink_tx_rdy_i : in  std_ulogic := 'L';                                  -- TX ready to send
 
     -- GPIO (available if IO_GPIO_NUM > 0) --
+    gpio_dir_o     : out std_ulogic_vector(31 downto 0);                     -- direction control (0=in, 1=out)
     gpio_o         : out std_ulogic_vector(31 downto 0);                     -- parallel output
     gpio_i         : in  std_ulogic_vector(31 downto 0) := (others => 'L');  -- parallel input; interrupt-capable
 
@@ -222,7 +255,6 @@ entity neorv32_top is
     twd_sda_i      : in  std_ulogic := 'H';                                  -- serial data line sense input
     twd_sda_o      : out std_ulogic;                                         -- serial data line output (pull low only)
     twd_scl_i      : in  std_ulogic := 'H';                                  -- serial clock line sense input
-    twd_scl_o      : out std_ulogic;                                         -- serial clock line output (pull low only)
 
     -- 1-Wire Interface (available if IO_ONEWIRE_EN = true) --
     onewire_i      : in  std_ulogic := 'H';                                  -- 1-wire bus sense input
@@ -457,11 +489,11 @@ begin
   -- **************************************************************************************************************************
 
   -- fast interrupt requests (FIRQs) --
-  cpu_firq(0)  <= firq(FIRQ_TWD); -- highest priority
+  cpu_firq(0)  <= '0'; -- reserved
   cpu_firq(1)  <= firq(FIRQ_CFS);
   cpu_firq(2)  <= firq(FIRQ_UART0);
   cpu_firq(3)  <= firq(FIRQ_UART1);
-  cpu_firq(4)  <= '0'; -- reserved
+  cpu_firq(4)  <= firq(FIRQ_TWD);
   cpu_firq(5)  <= firq(FIRQ_TRACER);
   cpu_firq(6)  <= firq(FIRQ_SPI);
   cpu_firq(7)  <= firq(FIRQ_TWI);
@@ -472,7 +504,7 @@ begin
   cpu_firq(12) <= firq(FIRQ_GPTMR);
   cpu_firq(13) <= firq(FIRQ_ONEWIRE);
   cpu_firq(14) <= firq(FIRQ_SLINK);
-  cpu_firq(15) <= firq(FIRQ_TRNG); -- lowest priority
+  cpu_firq(15) <= firq(FIRQ_TRNG);
 
   -- CPU core(s) + optional caches + bus switch --
   core_complex_gen:
@@ -919,39 +951,39 @@ begin
     -- -------------------------------------------------------------------------------------------
     neorv32_bus_io_switch_inst: entity neorv32.neorv32_bus_io_switch
     generic map (
-      DEV_SIZE  => iodev_size_c,
-      DEV_00_EN => bootrom_en_c,  DEV_00_BASE => base_io_bootrom_c,
-      DEV_01_EN => false,         DEV_01_BASE => (others => '0'), -- reserved
-      DEV_02_EN => false,         DEV_02_BASE => (others => '0'), -- reserved
-      DEV_03_EN => false,         DEV_03_BASE => (others => '0'), -- reserved
-      DEV_04_EN => false,         DEV_04_BASE => (others => '0'), -- reserved
-      DEV_05_EN => false,         DEV_05_BASE => (others => '0'), -- reserved
-      DEV_06_EN => false,         DEV_06_BASE => (others => '0'), -- reserved
-      DEV_07_EN => false,         DEV_07_BASE => (others => '0'), -- reserved
-      DEV_08_EN => false,         DEV_08_BASE => (others => '0'), -- reserved
-      DEV_09_EN => false,         DEV_09_BASE => (others => '0'), -- reserved
-      DEV_10_EN => IO_TWD_EN,     DEV_10_BASE => base_io_twd_c,
-      DEV_11_EN => IO_CFS_EN,     DEV_11_BASE => base_io_cfs_c,
-      DEV_12_EN => IO_SLINK_EN,   DEV_12_BASE => base_io_slink_c,
-      DEV_13_EN => IO_DMA_EN,     DEV_13_BASE => base_io_dma_c,
-      DEV_14_EN => false,         DEV_14_BASE => (others => '0'), -- reserved
-      DEV_15_EN => false,         DEV_15_BASE => (others => '0'), -- reserved
-      DEV_16_EN => io_pwm_en_c,   DEV_16_BASE => base_io_pwm_c,
-      DEV_17_EN => io_gptmr_en_c, DEV_17_BASE => base_io_gptmr_c,
-      DEV_18_EN => IO_ONEWIRE_EN, DEV_18_BASE => base_io_onewire_c,
-      DEV_19_EN => IO_TRACER_EN,  DEV_19_BASE => base_io_tracer_c,
-      DEV_20_EN => IO_CLINT_EN,   DEV_20_BASE => base_io_clint_c,
-      DEV_21_EN => IO_UART0_EN,   DEV_21_BASE => base_io_uart0_c,
-      DEV_22_EN => IO_UART1_EN,   DEV_22_BASE => base_io_uart1_c,
-      DEV_23_EN => IO_SDI_EN,     DEV_23_BASE => base_io_sdi_c,
-      DEV_24_EN => IO_SPI_EN,     DEV_24_BASE => base_io_spi_c,
-      DEV_25_EN => IO_TWI_EN,     DEV_25_BASE => base_io_twi_c,
-      DEV_26_EN => IO_TRNG_EN,    DEV_26_BASE => base_io_trng_c,
-      DEV_27_EN => IO_WDT_EN,     DEV_27_BASE => base_io_wdt_c,
-      DEV_28_EN => io_gpio_en_c,  DEV_28_BASE => base_io_gpio_c,
-      DEV_29_EN => IO_NEOLED_EN,  DEV_29_BASE => base_io_neoled_c,
-      DEV_30_EN => true,          DEV_30_BASE => base_io_sysinfo_c, -- allways enabled
-      DEV_31_EN => OCD_EN,        DEV_31_BASE => base_io_ocd_c
+      DEV_SIZE  => mem_io_dev_size_c,
+      DEV_00_EN => bootrom_en_c,      DEV_00_BASE => base_io_bootrom_c,
+      DEV_01_EN => false,             DEV_01_BASE => (others => '0'), -- reserved
+      DEV_02_EN => false,             DEV_02_BASE => (others => '0'), -- reserved
+      DEV_03_EN => false,             DEV_03_BASE => (others => '0'), -- reserved
+      DEV_04_EN => false,             DEV_04_BASE => (others => '0'), -- reserved
+      DEV_05_EN => false,             DEV_05_BASE => (others => '0'), -- reserved
+      DEV_06_EN => false,             DEV_06_BASE => (others => '0'), -- reserved
+      DEV_07_EN => false,             DEV_07_BASE => (others => '0'), -- reserved
+      DEV_08_EN => false,             DEV_08_BASE => (others => '0'), -- reserved
+      DEV_09_EN => false,             DEV_09_BASE => (others => '0'), -- reserved
+      DEV_10_EN => IO_TWD_EN,         DEV_10_BASE => base_io_twd_c,
+      DEV_11_EN => IO_CFS_EN,         DEV_11_BASE => base_io_cfs_c,
+      DEV_12_EN => IO_SLINK_EN,       DEV_12_BASE => base_io_slink_c,
+      DEV_13_EN => IO_DMA_EN,         DEV_13_BASE => base_io_dma_c,
+      DEV_14_EN => false,             DEV_14_BASE => (others => '0'), -- reserved
+      DEV_15_EN => false,             DEV_15_BASE => (others => '0'), -- reserved
+      DEV_16_EN => io_pwm_en_c,       DEV_16_BASE => base_io_pwm_c,
+      DEV_17_EN => io_gptmr_en_c,     DEV_17_BASE => base_io_gptmr_c,
+      DEV_18_EN => IO_ONEWIRE_EN,     DEV_18_BASE => base_io_onewire_c,
+      DEV_19_EN => IO_TRACER_EN,      DEV_19_BASE => base_io_tracer_c,
+      DEV_20_EN => IO_CLINT_EN,       DEV_20_BASE => base_io_clint_c,
+      DEV_21_EN => IO_UART0_EN,       DEV_21_BASE => base_io_uart0_c,
+      DEV_22_EN => IO_UART1_EN,       DEV_22_BASE => base_io_uart1_c,
+      DEV_23_EN => IO_SDI_EN,         DEV_23_BASE => base_io_sdi_c,
+      DEV_24_EN => IO_SPI_EN,         DEV_24_BASE => base_io_spi_c,
+      DEV_25_EN => IO_TWI_EN,         DEV_25_BASE => base_io_twi_c,
+      DEV_26_EN => IO_TRNG_EN,        DEV_26_BASE => base_io_trng_c,
+      DEV_27_EN => IO_WDT_EN,         DEV_27_BASE => base_io_wdt_c,
+      DEV_28_EN => io_gpio_en_c,      DEV_28_BASE => base_io_gpio_c,
+      DEV_29_EN => IO_NEOLED_EN,      DEV_29_BASE => base_io_neoled_c,
+      DEV_30_EN => true,              DEV_30_BASE => base_io_sysinfo_c, -- allways enabled
+      DEV_31_EN => OCD_EN,            DEV_31_BASE => base_io_ocd_c
     )
     port map (
       clk_i        => clk_i,
@@ -1067,22 +1099,25 @@ begin
     if io_gpio_en_c generate
       neorv32_gpio_inst: entity neorv32.neorv32_gpio
       generic map (
-        GPIO_NUM => IO_GPIO_NUM
+        GPIO_NUM => IO_GPIO_NUM,
+        GPIO_DIR => IO_GPIO_DIR_EN
       )
       port map (
-        clk_i     => clk_i,
-        rstn_i    => rstn_sys,
-        bus_req_i => iodev_req(IODEV_GPIO),
-        bus_rsp_o => iodev_rsp(IODEV_GPIO),
-        gpio_o    => gpio_o,
-        gpio_i    => gpio_i,
-        irq_o     => firq(FIRQ_GPIO)
+        clk_i      => clk_i,
+        rstn_i     => rstn_sys,
+        bus_req_i  => iodev_req(IODEV_GPIO),
+        bus_rsp_o  => iodev_rsp(IODEV_GPIO),
+        port_dir_o => gpio_dir_o,
+        port_out_o => gpio_o,
+        port_in_i  => gpio_i,
+        irq_o      => firq(FIRQ_GPIO)
       );
     end generate;
 
     neorv32_gpio_disabled:
     if not io_gpio_en_c generate
       iodev_rsp(IODEV_GPIO) <= rsp_terminate_c;
+      gpio_dir_o            <= (others => '0');
       gpio_o                <= (others => '0');
       firq(FIRQ_GPIO)       <= '0';
     end generate;
@@ -1278,7 +1313,6 @@ begin
         twd_sda_i => twd_sda_i,
         twd_sda_o => twd_sda_o,
         twd_scl_i => twd_scl_i,
-        twd_scl_o => twd_scl_o,
         irq_o     => firq(FIRQ_TWD)
       );
     end generate;
@@ -1287,7 +1321,6 @@ begin
     if not IO_TWD_EN generate
       iodev_rsp(IODEV_TWD) <= rsp_terminate_c;
       twd_sda_o            <= '1';
-      twd_scl_o            <= '1';
       firq(FIRQ_TWD)       <= '0';
     end generate;
 
@@ -1321,7 +1354,10 @@ begin
     if IO_TRNG_EN generate
       neorv32_trng_inst: entity neorv32.neorv32_trng
       generic map (
-        TRNG_FIFO => IO_TRNG_FIFO
+        TRNG_FIFO => IO_TRNG_FIFO,
+        NUM_RO    => IO_TRNG_NUM_RO,
+        NUM_INV   => IO_TRNG_NUM_INV,
+        NUM_RBIT  => IO_TRNG_NUM_RBIT
       )
       port map (
         clk_i     => clk_i,

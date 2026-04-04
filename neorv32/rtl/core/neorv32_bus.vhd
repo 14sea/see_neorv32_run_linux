@@ -908,7 +908,7 @@ begin
 
   -- if the store-conditional instruction fails there will be no memory request
   -- so we need to provide a local ACK to complete the bus access;
-  -- sc_pend tracks that a SC is in flight (for zeroing response data on success)
+  -- sc_pend tracks that a successful SC is in flight (for zeroing response data)
   sc_result: process(rstn_i, clk_i)
   begin
     if (rstn_i = '0') then
@@ -927,13 +927,13 @@ begin
 
   -- response --
   -- SC.W must return 0 on success and nonzero on failure in rd (RISC-V spec).
-  -- On success, the bus performs a write and memory returns ACK with undefined data;
-  -- we must override data to all-zeros. On failure, no bus request is issued;
-  -- we generate a local ACK and set data to 1 (LSB=1).
+  -- On failure, no bus request is issued; we generate a local ACK and return 1.
+  -- On success, the bus performs a write; memory returns ACK with undefined data
+  -- on the read-back bus, so we must override data to all-zeros.
   core_rsp_o.err  <= sys_rsp_i.err;
   core_rsp_o.ack  <= sys_rsp_i.ack or sc_fail; -- generate local ACK if SC fails
-  core_rsp_o.data <= (0 => '1', others => '0') when (sc_fail = '1') else -- SC failed: return 1
-                     (others => '0')            when (sc_pend = '1') else -- SC succeeded: return 0
+  core_rsp_o.data <= x"00000001" when (sc_fail = '1') else -- SC failed: return 1
+                     x"00000000" when (sc_pend = '1') else -- SC succeeded: return 0
                      sys_rsp_i.data; -- normal access: pass-through
 
 end neorv32_bus_amo_rvs_rtl;

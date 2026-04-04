@@ -4,7 +4,7 @@
   <vendor>github.com/stnolting/neorv32</vendor>
   <name>neorv32</name>
   <series>RISC-V</series>
-  <version>1.12.8</version>
+  <version>1.12.9</version>
   <description>The NEORV32 RISC-V Processor</description>
 
   <!-- CPU core -->
@@ -1078,7 +1078,7 @@
       <description>Two-wire device controller</description>
       <baseAddress>0xFFEA0000</baseAddress>
 
-      <interrupt><name>TWD_FIRQ</name><value>0</value></interrupt>
+      <interrupt><name>TWD_FIRQ</name><value>4</value></interrupt>
 
       <addressBlock>
         <offset>0</offset>
@@ -1135,14 +1135,29 @@
               <description>IRQ if TX FIFO empty</description>
             </field>
             <field>
+              <name>TWD_CTRL_IRQ_TX_NFULL</name>
+              <bitRange>[14:14]</bitRange>
+              <description>IRQ if TX FIFO is not full</description>
+            </field>
+            <field>
+              <name>TWD_CTRL_IRQ_COM_BEG</name>
+              <bitRange>[15:15]</bitRange>
+              <description>IRQ if begin of communication</description>
+            </field>
+            <field>
+              <name>TWD_CTRL_IRQ_COM_END</name>
+              <bitRange>[16:16]</bitRange>
+              <description>IRQ if end of communication</description>
+            </field>
+            <field>
               <name>TWD_CTRL_RX_FIFO</name>
-              <bitRange>[19:16]</bitRange>
+              <bitRange>[20:17]</bitRange>
               <access>read-only</access>
               <description>log2(TWD RX FIFO size)</description>
             </field>
             <field>
               <name>TWD_CTRL_TX_FIFO</name>
-              <bitRange>[23:20]</bitRange>
+              <bitRange>[24:21]</bitRange>
               <access>read-only</access>
               <description>log2(TWD TX FIFO size)</description>
             </field>
@@ -1171,22 +1186,20 @@
               <description>TX FIFO full</description>
             </field>
             <field>
-              <name>TWD_CTRL_SENSE_SCL</name>
+              <name>TWD_CTRL_COM_BEG</name>
               <bitRange>[29:29]</bitRange>
-              <access>read-only</access>
-              <description>current state of the SCL bus line</description>
+              <description>communication has started; clear by writing 1</description>
             </field>
             <field>
-              <name>TWD_CTRL_SENSE_SDA</name>
+              <name>TWD_CTRL_COM_END</name>
               <bitRange>[30:30]</bitRange>
-              <access>read-only</access>
-              <description>current state of the SDA bus line</description>
+              <description>communication has ended; clear by writing 1</description>
             </field>
             <field>
-              <name>TWD_CTRL_BUSY</name>
+              <name>TWD_CTRL_COM</name>
               <bitRange>[31:31]</bitRange>
               <access>read-only</access>
-              <description>bus engine is busy (transaction in progress)</description>
+              <description>active communication</description>
             </field>
           </fields>
         </register>
@@ -1240,22 +1253,40 @@
               <description>Clear data FIFO when set (flag auto clears)</description>
             </field>
             <field>
-              <name>TRNG_CTRL_FIFO_SIZE</name>
-              <bitRange>[5:2]</bitRange>
-              <access>read-only</access>
-              <description>log2(TRNG FIFO size)</description>
-            </field>
-            <field>
               <name>TRNG_CTRL_SIM_MODE</name>
-              <bitRange>[6:6]</bitRange>
+              <bitRange>[2:2]</bitRange>
               <access>read-only</access>
               <description>TRNG simulation mode (PRNG!) active</description>
             </field>
             <field>
               <name>TRNG_CTRL_AVAIL</name>
-              <bitRange>[7:7]</bitRange>
+              <bitRange>[3:3]</bitRange>
               <access>read-only</access>
               <description>Random data available</description>
+            </field>
+            <field>
+              <name>TRNG_CTRL_FIFO</name>
+              <bitRange>[7:4]</bitRange>
+              <access>read-only</access>
+              <description>log2(TRNG FIFO depth)</description>
+            </field>
+            <field>
+              <name>TRNG_CTRL_NBIT</name>
+              <bitRange>[11:8]</bitRange>
+              <access>read-only</access>
+              <description>log2(number of raw bits) processed for one output byte</description>
+            </field>
+            <field>
+              <name>TRNG_CTRL_NRO</name>
+              <bitRange>[19:12]</bitRange>
+              <access>read-only</access>
+              <description>Total number of ring-oscillators</description>
+            </field>
+            <field>
+              <name>TRNG_CTRL_NINV</name>
+              <bitRange>[31:20]</bitRange>
+              <access>read-only</access>
+              <description>Number of inverters in first ring-oscillator</description>
             </field>
           </fields>
         </register>
@@ -1363,6 +1394,11 @@
           <name>PORT_OUT</name>
           <description>Parallel output port</description>
           <addressOffset>0x04</addressOffset>
+        </register>
+        <register>
+          <name>PORT_DIR</name>
+          <description>Port direction configuration: 0 = input, 1 = output</description>
+          <addressOffset>0x08</addressOffset>
         </register>
         <register>
           <name>IRQ_TYPE</name>

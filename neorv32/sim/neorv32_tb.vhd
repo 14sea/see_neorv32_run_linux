@@ -89,10 +89,11 @@ architecture neorv32_tb_rtl of neorv32_tb is
 
   -- IO connection --
   signal uart0_txd, uart0_ctsn, uart1_txd, uart1_ctsn : std_ulogic;
-  signal gpio : std_ulogic_vector(31 downto 0);
+  signal gpio_dir, gpio_out, gpio_in : std_ulogic_vector(31 downto 0);
+  signal gpio : std_logic_vector(31 downto 0);
   signal i2c_scl, i2c_sda : std_logic;
   signal twi_scl_i, twi_scl_o, twi_sda_i, twi_sda_o : std_ulogic;
-  signal twd_scl_i, twd_scl_o, twd_sda_i, twd_sda_o : std_ulogic;
+  signal twd_scl_i, twd_sda_i, twd_sda_o : std_ulogic;
   signal onewire : std_logic;
   signal onewire_i, onewire_o : std_ulogic;
   signal spi_csn : std_ulogic_vector(7 downto 0);
@@ -198,43 +199,61 @@ begin
     DCACHE_NUM_BLOCKS   => DCACHE_NUM_BLOCKS,
     CACHE_BLOCK_SIZE    => CACHE_BLOCK_SIZE,
     CACHE_BURSTS_EN     => CACHE_BURSTS_EN,
-    -- External bus interface --
+    -- External Bus Interface (XBUS) --
     XBUS_EN             => true,
     XBUS_TIMEOUT        => 2048,
     XBUS_REGSTAGE_EN    => true,
-    -- Processor peripherals --
+    -- General-Purpose Input/Output Controller (GPIO) --
     IO_GPIO_NUM         => 32,
+    IO_GPIO_DIR_EN      => true,
+    -- RISC-V Core-Local Interruptor (CLINT) --
     IO_CLINT_EN         => true,
     IO_UART0_EN         => true,
+    -- Universal Asynchronous Receiver/Transmitter (UART0/UART1) --
     IO_UART0_RX_FIFO    => 32,
     IO_UART0_TX_FIFO    => 32,
     IO_UART1_EN         => true,
     IO_UART1_RX_FIFO    => 1,
     IO_UART1_TX_FIFO    => 1,
+    -- Serial Peripheral Interface (SPI Host, SDI Device) --
     IO_SPI_EN           => true,
     IO_SPI_FIFO         => 4,
     IO_SDI_EN           => true,
     IO_SDI_FIFO         => 4,
+    -- Two-Wire Interface (TWI Host, TWD Device) --
     IO_TWI_EN           => true,
     IO_TWI_FIFO         => 4,
     IO_TWD_EN           => true,
     IO_TWD_RX_FIFO      => 4,
     IO_TWD_TX_FIFO      => 4,
+    -- Pulse-Width Modulation Controller (PWM) --
     IO_PWM_NUM          => 8,
+    -- Watchdog Timer (WDT) --
     IO_WDT_EN           => true,
+    -- True-Random Number Generator (TRNG) --
     IO_TRNG_EN          => true,
     IO_TRNG_FIFO        => 4,
+    IO_TRNG_NUM_RO      => 3,
+    IO_TRNG_NUM_INV     => 5,
+    IO_TRNG_NUM_RBIT    => 64,
+    -- Custom Functions Subsystem (CFS) --
     IO_CFS_EN           => true,
+    -- Smart LED interface (NEOLED) --
     IO_NEOLED_EN        => true,
     IO_NEOLED_TX_FIFO   => 8,
+    -- General-Purpose Timer (GPTMR) --
     IO_GPTMR_NUM        => 4,
+    -- 1-Wire Interface (ONEWIRE) --
     IO_ONEWIRE_EN       => true,
     IO_ONEWIRE_FIFO     => 8,
+    -- Direct Memory Access Controller (DMA) --
     IO_DMA_EN           => true,
     IO_DMA_DSC_FIFO     => 8,
+    -- Stream Link Interface (SLINK) --
     IO_SLINK_EN         => true,
     IO_SLINK_RX_FIFO    => 4,
     IO_SLINK_TX_FIFO    => 1,
+    -- Instruction Tracer (TRACER) --
     IO_TRACER_EN        => true,
     IO_TRACER_BUFFER    => 32,
     IO_TRACER_SIMLOG_EN => TRACE_LOG_EN
@@ -277,8 +296,9 @@ begin
     slink_tx_lst_o => slink_tx.last,
     slink_tx_rdy_i => slink_tx.ready,
     -- GPIO --
-    gpio_o         => gpio,
-    gpio_i         => gpio,
+    gpio_dir_o     => gpio_dir,
+    gpio_o         => gpio_out,
+    gpio_i         => gpio_in,
     -- primary UART0 --
     uart0_txd_o    => uart0_txd,
     uart0_rxd_i    => uart1_txd,
@@ -308,7 +328,6 @@ begin
     twd_sda_i      => twd_sda_i,
     twd_sda_o      => twd_sda_o,
     twd_scl_i      => twd_scl_i,
-    twd_scl_o      => twd_scl_o,
     -- 1-Wire Interface --
     onewire_i      => onewire_i,
     onewire_o      => onewire_o,
@@ -328,7 +347,18 @@ begin
   );
 
 
-  -- Two-Wire Bus - Tri-State Drivers (modules can only actively pull the signals low) ------
+  -- Bidirectional GPIO ---------------------------------------------------------------------
+  -- -------------------------------------------------------------------------------------------
+  gpio_gen:
+  for i in 0 to 31 generate
+    gpio(i) <= std_logic(gpio_out(i)) when (gpio_dir(i) = '1') else 'Z'; -- drive
+  end generate;
+
+  gpio_in <= std_ulogic_vector(gpio); -- sense
+  gpio    <= (others => 'L'); -- weak pull-downs
+
+
+  -- Two-Wire Bus - Tri-State Drivers (modules can only actively pull low) ------------------
   -- -------------------------------------------------------------------------------------------
   i2c_sda   <= '0' when (twi_sda_o = '0') else 'Z';
   i2c_scl   <= '0' when (twi_scl_o = '0') else 'Z';
@@ -336,7 +366,6 @@ begin
   twi_scl_i <= std_ulogic(i2c_scl); -- sense input
 
   i2c_sda   <= '0' when (twd_sda_o = '0') else 'Z';
-  i2c_scl   <= '0' when (twd_scl_o = '0') else 'Z';
   twd_sda_i <= std_ulogic(i2c_sda); -- sense input
   twd_scl_i <= std_ulogic(i2c_scl); -- sense input
 
@@ -345,7 +374,7 @@ begin
   i2c_sda <= 'H';
 
 
-  -- One-Wire Bus - Tri-State Driver (module can only actively pull the signals low) --------
+  -- One-Wire Bus - Tri-State Driver (module can only actively pull low) --------------------
   -- -------------------------------------------------------------------------------------------
   onewire   <= '0' when (onewire_o = '0') else 'Z';
   onewire_i <= std_ulogic(onewire); -- sense input
