@@ -1,7 +1,7 @@
 # Quartus Settings for NEORV32 Demo — AX301 (EP4CE6F17C8)
 
 set_global_assignment -name FAMILY "Cyclone IV E"
-set_global_assignment -name DEVICE EP4CE6F17C8
+set_global_assignment -name DEVICE EP4CE10F17C8
 set_global_assignment -name TOP_LEVEL_ENTITY ax301_top
 set_global_assignment -name ORIGINAL_QUARTUS_VERSION 21.1
 set_global_assignment -name PROJECT_CREATION_TIME_DATE "2026-03-23"
@@ -140,3 +140,10 @@ set_global_assignment -name RESERVE_ALL_UNUSED_PINS_WEAK_PULLUP "AS INPUT TRI-ST
 set_global_assignment -name MIN_CORE_JUNCTION_TEMP 0
 set_global_assignment -name MAX_CORE_JUNCTION_TEMP 85
 set_global_assignment -name NUM_PARALLEL_PROCESSORS ALL
+
+# ── CE10 timing push: exploit extra LEs for placement/routing headroom ──────
+set_global_assignment -name OPTIMIZATION_MODE "HIGH PERFORMANCE EFFORT"
+set_global_assignment -name PLACEMENT_EFFORT_MULTIPLIER 4.0
+set_global_assignment -name ROUTER_TIMING_OPTIMIZATION_LEVEL MAXIMUM
+set_global_assignment -name FITTER_EFFORT "STANDARD FIT"
+set_global_assignment -name PHYSICAL_SYNTHESIS_EFFORT EXTRA
