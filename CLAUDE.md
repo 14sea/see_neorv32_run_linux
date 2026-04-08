@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-This project boots nommu Linux (kernel 6.6.83) on a NEORV32 RV32IMAC soft-core FPGA — the first known Linux boot on NEORV32. The NEORV32 has no MMU and no S-mode. Getting Linux running required 16 kernel patches across arch/riscv, scheduler, RCU, init, and drivers. We also found and fixed a [SC.W return value bug](https://github.com/stnolting/neorv32/pull/1520) in NEORV32's bus reservation station, enabling native atomic instructions in the kernel.
+This project boots nommu Linux (kernel 6.6.83) on a NEORV32 RV32IMAC soft-core FPGA — the first known Linux boot on NEORV32. The NEORV32 has no MMU and no S-mode. Getting Linux running required 16 kernel patches across arch/riscv, scheduler, RCU, init, and drivers. We also found and fixed a [SC.W return value bug](https://github.com/stnolting/neorv32/pull/1520) in NEORV32's bus reservation station, enabling native atomic instructions in the kernel; the fix is now merged upstream and included in v1.12.9.
 
 Target hardware: Heijin AX301 board with Altera Cyclone IV EP4CE6 FPGA, 32 MB SDRAM, 50 MHz.
 
@@ -20,7 +20,7 @@ Target hardware: Heijin AX301 board with Altera Cyclone IV EP4CE6 FPGA, 32 MB SD
 ```
 see_neorv32_run_linux/
 ├── tools/openFPGALoader/    — openFPGALoader source (build from source)
-├── neorv32/                 — NEORV32 RTL source (v1.12.8)
+├── neorv32/                 — NEORV32 RTL source (git submodule → stnolting/neorv32 v1.12.9)
 ├── linux-6.6.83.tar.xz     — Linux kernel tarball
 ├── rtl/                     — Custom RTL (ax301_top.vhd, sdram_ctrl.v, wb_sdram_ctrl.v)
 ├── quartus/                 — Quartus project (neorv32_demo.qsf/qpf/sdc)
@@ -35,6 +35,8 @@ see_neorv32_run_linux/
 ## Complete Build-from-Source Flow
 
 All source code is included. Build order matters — later steps depend on earlier outputs.
+
+**Submodule:** `neorv32/` is a git submodule pointing to `stnolting/neorv32` (pinned at v1.12.9). After cloning this repo, run `git submodule update --init --recursive` before building.
 
 ### Prerequisites
 
