@@ -189,18 +189,19 @@ python3 host/boot_sd.py --port /dev/ttyUSB0
 由于 LBA 固定，`sd_update.py` 可以只重写 header + 发生变动的槽位 —— 通常只要 **7 个 sector（~10 s 总时间，其中实际写 SD 只用 ~1 s）**，而不是 163 s。写入前，它会通过新增的 stage2 `R` 模式读回卡上的 header，验证 `magic` / `layout_version` / LBA 常数是否和 `sd_layout.py` 一致；如果布局漂移了（例如你改了某个槽位大小），它会拒绝执行并提醒你先跑 `sd_pack.py`。
 
 ```bash
-# 只修改 /init 或 initramfs 里的应用时：
+# 一键 /init 改-测回圈（默认 230400 baud + persistent stage2）：
 vim sw/initramfs/init.c
 make -C sw/initramfs LINUX_DIR=../../linux-6.6.83
 cp sw/initramfs/neo_initramfs.cpio.gz output/
-python3 host/sd_update.py --port /dev/ttyUSB0   # ~10s（7 个 sector）
-python3 host/boot_sd.py   --port /dev/ttyUSB0   # ~150s 到 shell
+python3 host/boot_sd.py --update        # 更新 init 槽 + 启动，~17s 写入
+# 追加 --update-dtb / --update-kernel 更新其它槽；--update-verify
+# 会在写完后重读 header 做自检。
 
-# 如果 DTB 也改了：
-python3 host/sd_update.py --dtb
+# 仅更新不启动：
+python3 host/sd_update.py --port /dev/ttyUSB0 --verify
 
 # 完整重写（内核变了、布局变了、或第一次用这张卡）：
-python3 host/sd_pack.py --port /dev/ttyUSB0     # ~163s
+python3 host/sd_pack.py --port /dev/ttyUSB0     # ~99s @ 230400
 ```
 
 | 模式 | 主机脚本 | 到 shell 的时间 | 使用场景 |
@@ -208,7 +209,18 @@ python3 host/sd_pack.py --port /dev/ttyUSB0     # ~163s
 | xmodem | `boot_linux.py` | ~243 s | 没有 SD 卡，或调试 stage2 |
 | SD blob | `boot_sd.py` | ~150 s | 日常开发（一次性 `sd_pack.py` 之后） |
 
-Stage2 loader 命令（上传 stage2 之后通过 UART 发送）：`l`=xmodem、`s`=SD smoke 测试、`d`=SD dump、`w`/`W`=SD 单块写 / 多块写测试、`b`=从 SD blob 启动。
+### 主机 / stage2 优化（Phase 1–6）
+
+在上面的 SD 路径之上，又叠加了六项优化：
+
+1. **UART baud 提升到 230400** — 主机送 probe byte 同步，任何失败自动回退到 115200。stage2 新增 `B` 模式；共用 `host/sd_proto.setup_session()`。`sd_pack.py`：**165 s → 99 s**。
+2. **Persistent stage2** — dispatcher 命令之间永不超时；任何主机工具加 `--persistent --baud 230400` 即可复用已运行的 stage2，省掉 FPGA 烧录 + bootloader 握手 + stage2 上传。`sd_update.py`：**39 s → 17 s**。
+3. **`boot_sd.py --update`** — 一键改 → 更新 → 启动。写入阶段用快 baud，进 kernel 前自动切回 115200。
+4. **`sd_update.py --verify`** — 写完后再用 `R` 模式读回 header，和写入内容逐栏比对。
+5. **参数化 `sd_dump.py --lba/--count/--hex`** — stage2 `d` 模式现在从 UART 读 LBA + count（上限 2 MB）然后回到 dispatcher，可以在 `--persistent` 模式下链式 dump。
+6. **`boot_sd.py` build-tag 检查** — 送 `'b'` 之前先读 header，逐槽打印 `on-card vs local` 大小，`✓` 或 `✗ STALE`。能在 ~150 s 启动前就发现 SD 内容过期。`--no-check` 可跳过。
+
+Stage2 loader 命令（上传 stage2 之后通过 UART 发送）：`l`=xmodem、`s`=SD smoke、`d`=SD dump（参数化）、`w`/`W`=写测试 / 多段写、`R`=读 header、`B`=切 baud、`b`=从 SD blob 启动。
 
 ## 系统架构
 

@@ -9,7 +9,7 @@ int  sd_read_block(uint32_t lba, uint8_t *dst);
 int  sd_write_block(uint32_t lba, const uint8_t *src);
 int  sd_is_sdhc(void);
 void sd_smoke(void);
-void sd_dump(uint32_t n_blocks);
+void sd_dump(void);
 void sd_write_test(void);
 void sd_write_multi(void);
 void sd_read_header(void);

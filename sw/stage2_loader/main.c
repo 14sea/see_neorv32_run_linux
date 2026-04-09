@@ -288,6 +288,50 @@ static void mode_uboot(void)
     uboot();
 }
 
+/* Mode 'B': switch UART baud. Host protocol:
+ *   host:   'B' + u32 target_baud  (at CURRENT baud)
+ *   stage2: "BAUD_SWITCH\n"         (at CURRENT baud, TX drained)
+ *   stage2: reconfigures UART
+ *   stage2: "BAUD_OK\n"             (at NEW baud)
+ * On bad baud, stage2 prints "BAUD_BAD\n" and stays at current baud.
+ * Host MUST verify BAUD_OK at the new baud within ~1 s; on timeout it
+ * should assume the switch failed and fall back. */
+static void mode_set_baud(void)
+{
+    /* Receive u32 target baud (little-endian). Use raw UART so we
+     * don't pull in the HAL just for getc. */
+    volatile uint32_t *uart_ctrl = (volatile uint32_t *)0xFFF50000UL;
+    volatile uint32_t *uart_data = (volatile uint32_t *)0xFFF50004UL;
+    #define RX_NEMPTY (1u << 16)
+    #define TX_EMPTY  (1u << 18)
+
+    uint32_t baud = 0;
+    for (int i = 0; i < 4; i++) {
+        while (!(uart_ctrl[0] & RX_NEMPTY)) { }
+        baud |= ((uint32_t)(uart_data[0] & 0xFF)) << (8 * i);
+    }
+
+    if (baud < 9600 || baud > 2000000) {
+        uart_puts("BAUD_BAD\n");
+        return;
+    }
+
+    uart_puts("BAUD_SWITCH\n");
+    /* Wait for TX FIFO to drain before changing the divider. */
+    while (!(uart_ctrl[0] & TX_EMPTY)) { }
+    /* Tiny extra pause so the last stop bit fully clears the PHY. */
+    for (volatile int i = 0; i < 2000; i++) { }
+
+    neorv32_uart0_setup(baud, 0);
+
+    /* Wait for a probe byte from the host at the new baud before replying.
+     * Host closes+reopens PL2303 (~350 ms) during which any TX would be
+     * lost. Host sends 'P' until it sees BAUD_OK. */
+    while (!(uart_ctrl[0] & RX_NEMPTY)) { }
+    (void)uart_data[0];
+    uart_puts("BAUD_OK\n");
+}
+
 /* Mode 'b': Load Linux from SD card blob (header @ LBA 0) */
 struct sd_boot_hdr {
     char     magic[8];      /* "NEOLNX\0\0" */
@@ -514,7 +558,7 @@ int main(void)
     }
 
     /* Wait for mode selection: 'l'=Linux xmodem, 's'=SD smoke test, else U-Boot */
-    uart_puts("[stage2] l=xmodem s=smoke d=dump w=wtest W=wmulti R=rdhdr b=bootSD else=U-Boot\r\n");
+    uart_puts("[stage2] l=xmodem s=smoke d=dump w=wtest W=wmulti R=rdhdr B=baud b=bootSD else=U-Boot\r\n");
     int mode = uart_getc_timeout(3000);
 
     /* Non-terminal modes (R, W, s, w) return to the dispatcher so the
@@ -526,8 +570,7 @@ int main(void)
         } else if (mode == 'b') {
             mode_sd_boot();            /* jumps to kernel, no return */
         } else if (mode == 'd') {
-            sd_dump(512);
-            while (1) { }              /* dump halts (no use case to chain) */
+            sd_dump();                 /* parametric: host sends lba+count */
         } else if (mode == 's') {
             sd_smoke();
         } else if (mode == 'w') {
@@ -536,16 +579,18 @@ int main(void)
             sd_write_multi();
         } else if (mode == 'R') {
             sd_read_header();
+        } else if (mode == 'B') {
+            mode_set_baud();
         } else {
             mode_uboot();              /* loads U-Boot, no return */
         }
         /* Wait for next command. Long timeout so host has time. */
         uart_puts("[stage2] ready for next cmd\r\n");
-        mode = uart_getc_timeout(30000);
-        if (mode < 0) {
-            uart_puts("[stage2] idle, halting\r\n");
-            while (1) { }
-        }
+        /* Persistent stage2: never give up on the host. Idle forever so a
+         * later host run can reuse this stage2 with --persistent, avoiding
+         * re-program + handshake + upload (~15-20 s). Board power-cycle or
+         * a re-program by openFPGALoader is the only way out. */
+        while ((mode = uart_getc_timeout(3600000)) < 0) { }
     }
 
     return 0;

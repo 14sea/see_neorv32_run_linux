@@ -239,7 +239,36 @@ Fixed LBAs mean `host/sd_update.py` can rewrite only the header + the slot(s) th
 - `sd_pack.py` — 4 segments: header, Image, DTB, initrd. Slot overflow checks.
 - `sd_update.py` — default writes header + initrd. `--dtb` adds DTB, `--kernel` adds Image, `--no-initrd` skips initrd. Always rewrites header so sizes stay truthful.
 
-**Stage2 size budget** is now **~7580 / 8192 B** (~610 B margin).
+**Stage2 size budget** is now **~7832 / 8192 B** (~360 B margin).
+
+### SD workflow speed-ups (Phase 1-6)
+
+Six optimizations layered on top of the baseline SD path. All host tools share `host/sd_proto.py`.
+
+1. **UART baud bump** — stage2 mode `B`: host sends `'B' + u32 baud` at 115200, stage2 acks `BAUD_SWITCH`, reconfigures, then **waits for a host probe byte** at the new baud before replying `BAUD_OK`. The probe sync avoids the PL2303 reopen window (~350 ms) dropping stage2's early TX. Default target = **230400** (50 MHz / (2·109) = 229358, 0.45% error — stable; 460800 has ~1.4% error and is not reliable on PL2303). `sd_proto.setup_session()` auto-falls back to 115200 on any failure (re-init from FPGA program). Effect: **`sd_pack.py` 165 s → 99 s**.
+
+2. **Persistent stage2** — dispatcher's post-command timeout is now effectively infinite (`uart_getc_timeout(3600000)` in a loop). `host/sd_proto.persistent_session()` attaches to an already-running stage2 at the baud it's currently at, skipping FPGA program + bootloader handshake + stage2 upload. All SD host tools accept `--persistent --baud <N>`. Effect: **`sd_update.py` 39 s → 17 s** wall-clock for init-only update.
+
+3. **`boot_sd.py --update`** — one-shot edit/test: fast-baud session → `update_sd()` → drop back to console baud via `maybe_switch_baud` → send `'b'`. Flags: `--update-kernel`, `--update-dtb`, `--update-verify`. Single command for the `/init` iteration loop.
+
+4. **`sd_update.py --verify`** — after the multi-seg write, re-read LBA 0 via mode `R` and compare every header field against what was written. Propagated to `boot_sd.py --update-verify`. Also available from the reusable `update_sd(ser, base, ..., verify=True)` helper.
+
+5. **Parametric `sd_dump.py`** — stage2 mode `d` now reads `u32 lba + u32 count` from UART (cap 4096 sectors = 2 MB), prints `DUMP_READY\n`, streams data, prints `\nDUMP_END\n`, then returns to the dispatcher (no more `while(1)` halt). Host script supports `--lba/--count/--hex/--persistent/--baud`; `-o -` streams to stdout. Chainable with `--persistent`.
+
+6. **`boot_sd.py` build-tag check** — before sending `'b'`, reads header via mode `R` and prints `on-card vs local` sizes per slot (`✓` or `✗ STALE`). Warns with a hint to re-run `--update` or `sd_pack.py`. Skip with `--no-check`. Catches stale SD before the ~150 s boot cycle.
+
+**Key shared helpers** (`host/sd_proto.py`):
+- `get_session(..., persistent=False, target_baud=...)` — unified entry for fresh or attached sessions. Handles baud bump + fallback internally.
+- `maybe_switch_baud(ser, target)` — in-session up/down switch; uses `ser.baudrate` (not a hardcoded APP_BAUD shortcut) so it works in both directions.
+- `wait_for(ser, marker, timeout, label)` — returns bytes AFTER the marker, critical for `read_header` which streams raw payload right after the `RD_READY\n` line.
+
+**Typical dev loop** (post-Phase 3):
+```bash
+# edit sw/initramfs/init.c, then:
+make -C sw/initramfs LINUX_DIR=../../linux-6.6.83
+cp sw/initramfs/neo_initramfs.cpio.gz output/
+python3 host/boot_sd.py --update         # ~17 s update + boot
+```
 
 ## Architecture
 

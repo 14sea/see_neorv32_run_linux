@@ -5,72 +5,109 @@ boot_sd.py — Boot Linux by instructing stage2 to load the blob from SD.
 Assumes sd_pack.py has already written a blob (magic NEOLNX) to LBA 0.
 No xmodem transfer — just program FPGA, upload stage2, send 'b'.
 """
-import argparse, os, subprocess, sys, time, serial
+import argparse, os, sys, time
 
-BOOT_BAUD = 19200
-APP_BAUD  = 115200
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import sd_layout as L
+from sd_proto import (get_session, maybe_switch_baud, read_header,
+                      BAUD_CANDIDATES, APP_BAUD)
+from sd_update import update_sd
+
+
+def check_build_tag(ser, base):
+    """Read on-card header and compare its sizes to local output/ files.
+    Prints a status line; returns True if everything matches."""
+    try:
+        h = L.parse_header(read_header(ser))
+        L.verify_layout(h)
+    except (ValueError, RuntimeError) as e:
+        print(f"[!] on-card header unreadable: {e}")
+        return False
+
+    files = {
+        "Image":  os.path.join(base, "output", "Image"),
+        "DTB":    os.path.join(base, "output", "neorv32_ax301.dtb"),
+        "initrd": os.path.join(base, "output", "neo_initramfs.cpio.gz"),
+    }
+    local = {k: (os.path.getsize(v) if os.path.exists(v) else None)
+             for k, v in files.items()}
+    on_card = {"Image": h["image_sz"], "DTB": h["dtb_sz"],
+               "initrd": h["initrd_sz"]}
+
+    all_match = True
+    for name in ("Image", "DTB", "initrd"):
+        lo, oc = local[name], on_card[name]
+        if lo is None:
+            print(f"    {name:6s}: on-card={oc:>8}  local=(missing)")
+            continue
+        tag = "✓" if lo == oc else "✗ STALE"
+        if lo != oc: all_match = False
+        print(f"    {name:6s}: on-card={oc:>8}  local={lo:>8}  {tag}")
+    if not all_match:
+        print("[!] Local output/ differs from SD card — boot may be stale.")
+        print("    Hint: re-run with --update (init only) or sd_pack.py "
+              "(full).")
+    return all_match
 
 
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--port", default="/dev/ttyUSB0")
     ap.add_argument("--skip-program", action="store_true")
+    ap.add_argument("--baud", type=int, default=APP_BAUD,
+                    help="console baud (default 115200; kernel uses 115200)")
+    ap.add_argument("--persistent", action="store_true",
+                    help="attach to already-running stage2 (skip program/upload)")
+    ap.add_argument("--update", action="store_true",
+                    help="rewrite init slot (+ header) from local "
+                         "output/ before booting — one-shot edit/test loop")
+    ap.add_argument("--update-kernel", action="store_true",
+                    help="with --update, also rewrite Image slot")
+    ap.add_argument("--update-dtb", action="store_true",
+                    help="with --update, also rewrite DTB slot")
+    ap.add_argument("--update-verify", action="store_true",
+                    help="with --update, re-read header after write")
+    ap.add_argument("--no-check", action="store_true",
+                    help="skip on-card vs local size comparison")
     args = ap.parse_args()
 
     base = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     stage2 = os.path.join(base, "output", "stage2_loader.bin")
-    rbf    = os.path.join(base, "output", "neorv32_demo.rbf")
 
-    if not args.skip_program:
-        loader = os.path.join(base, "tools", "openFPGALoader", "build", "openFPGALoader")
-        print("[1] Programming FPGA")
-        r = subprocess.run([loader, "-c", "usb-blaster", rbf],
-                           capture_output=True, text=True, timeout=30)
-        if r.returncode != 0:
-            print("[!]", r.stderr); sys.exit(1)
-        time.sleep(1.0)
+    # For --update we need the fast baud during the write, then drop back
+    # to 115200 before sending 'b' (kernel UART runs at 115200).
+    session_baud = BAUD_CANDIDATES[0] if args.update else args.baud
+    ser = get_session(base, args.port, stage2,
+                      skip_program=args.skip_program,
+                      target_baud=session_baud,
+                      persistent=args.persistent)
 
-    # Bootloader handshake
-    print("[2] Bootloader handshake")
-    ser = None; buf = b""
-    t0 = time.time()
-    while time.time() - t0 < 20:
-        if ser is None:
-            try:
-                ser = serial.Serial(args.port, BOOT_BAUD, timeout=1)
-                ser.dtr = False; ser.rts = False
-                time.sleep(0.3); ser.reset_input_buffer()
-            except Exception:
-                time.sleep(1.0); continue
-        ser.write(b" "); time.sleep(0.3)
-        c = ser.read(2000)
-        if c: buf += c
-        if b"CMD:>" in buf or b"Press any key" in buf: break
-    if b"Press any key" in buf:
-        ser.write(b" "); time.sleep(0.3); buf += ser.read(1000)
-    if b"CMD:>" not in buf:
-        print("[!] no prompt"); sys.exit(1)
+    if args.update:
+        try:
+            update_sd(ser, base,
+                      do_kernel=args.update_kernel,
+                      do_dtb=args.update_dtb,
+                      do_initrd=True,
+                      verify=args.update_verify)
+        except (ValueError, RuntimeError) as e:
+            print(f"[!] update failed: {e}")
+            ser.close(); sys.exit(2)
+        # Drop back to console baud before jumping to kernel.
+        if ser.baudrate != args.baud:
+            new_ser = maybe_switch_baud(ser, args.baud)
+            if not new_ser:
+                print("[!] could not drop baud back for console; aborting")
+                ser.close(); sys.exit(2)
+            ser = new_ser
+    elif not args.no_check:
+        # No --update: compare on-card sizes to local output/ so the user
+        # notices stale SD contents before a 150 s boot cycle.
+        print("[*] Build-tag check (on-card vs local output/):")
+        check_build_tag(ser, base)
 
-    with open(stage2, "rb") as f: data = f.read()
-    print(f"[2] Upload stage2 ({len(data)}B)")
-    ser.reset_input_buffer()
-    ser.write(b"u"); time.sleep(0.5); ser.read(1000)
-    time.sleep(0.2)
-    ser.write(data); ser.flush()
-    t0 = time.time(); resp = b""
-    while time.time() - t0 < 15:
-        resp += ser.read(500)
-        if b"OK" in resp: break
-    if b"OK" not in resp:
-        print("[!] upload failed"); sys.exit(1)
-
-    ser.write(b"e"); ser.flush()
-    ser.close(); time.sleep(0.3)
-
-    ser = serial.Serial(args.port, APP_BAUD, timeout=0.5)
-    ser.dtr = False; ser.rts = False
-    print(f"[3] @ {APP_BAUD}, sending 'b' (boot from SD)")
-    time.sleep(0.5)
+    ser.timeout = 0.5
+    print(f"[3] @ {ser.baudrate}, sending 'b' (boot from SD)")
+    time.sleep(0.3)
     ser.write(b"b"); ser.flush()
 
     # Stream console forever

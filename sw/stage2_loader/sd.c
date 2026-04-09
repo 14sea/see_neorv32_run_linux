@@ -261,22 +261,34 @@ static uint8_t uart_raw_recv(void)
     return (uint8_t)(UART0_DATA & 0xFF);
 }
 
-void sd_dump(uint32_t n_blocks)
+void sd_dump(void)
 {
+    /* Protocol:
+     *   host:   'd' + u32 start_lba + u32 count   (little-endian)
+     *   stage2: "DUMP_READY\n"                    (params received + init OK)
+     *   stage2: count*512 raw bytes
+     *   stage2: "\nDUMP_END\n"                    (back to dispatcher)
+     * On bad params: "DUMP_BAD\n". On SD error: "\nDUMP_ERR\n" and stop. */
+    uint32_t start = 0, count = 0;
+    for (int i = 0; i < 4; i++) start |= ((uint32_t)uart_raw_recv()) << (8 * i);
+    for (int i = 0; i < 4; i++) count |= ((uint32_t)uart_raw_recv()) << (8 * i);
+
+    if (count == 0 || count > 4096) {
+        uart_puts_ext("DUMP_BAD\n");
+        return;
+    }
     if (sd_init()) {
         uart_puts_ext("[sd] dump: init FAIL\r\n");
         return;
     }
-    /* Marker: host reads ASCII until DUMP_BEGIN\n, then exactly
-     * n_blocks*512 raw bytes, then \nDUMP_END\n. */
-    uart_puts_ext("DUMP_BEGIN\n");
-    for (uint32_t lba = 0; lba < n_blocks; lba++) {
-        if (sd_read_block(lba, smoke_buf)) {
+    uart_puts_ext("DUMP_READY\n");
+    for (uint32_t i = 0; i < count; i++) {
+        if (sd_read_block(start + i, smoke_buf)) {
             uart_puts_ext("\nDUMP_ERR\n");
             return;
         }
-        for (int i = 0; i < 512; i++)
-            uart_raw_byte(smoke_buf[i]);
+        for (int j = 0; j < 512; j++)
+            uart_raw_byte(smoke_buf[j]);
     }
     uart_puts_ext("\nDUMP_END\n");
 }

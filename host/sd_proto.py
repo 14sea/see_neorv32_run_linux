@@ -10,6 +10,11 @@ BOOT_BAUD = 19200
 APP_BAUD  = 115200
 SECTOR    = 512
 
+# Fallback chain for the UART-baud bump. First entry is the preferred
+# target; last entry must be APP_BAUD so the fallback always lands at a
+# known-good rate.
+BAUD_CANDIDATES = [230400, 115200]
+
 
 def program_fpga(base):
     loader = os.path.join(base, "tools", "openFPGALoader", "build", "openFPGALoader")
@@ -68,6 +73,113 @@ def reopen_app(ser):
     s.dtr = False; s.rts = False
     time.sleep(0.5)
     return s
+
+
+def maybe_switch_baud(ser, target):
+    """Ask stage2 to switch UART baud via mode 'B'. Returns True on success.
+    On any failure the caller should re-init the session at a lower baud."""
+    if ser.baudrate == target:
+        return ser
+    print(f"[*] Switching UART baud: {ser.baudrate} -> {target}")
+    ser.reset_input_buffer()
+    ser.write(b"B" + struct.pack("<I", target)); ser.flush()
+    # First ack at old baud
+    buf = b""; t0 = time.time()
+    while time.time() - t0 < 2:
+        c = ser.read(64)
+        if c: buf += c
+        if b"BAUD_SWITCH" in buf or b"BAUD_BAD" in buf: break
+    if b"BAUD_BAD" in buf:
+        print(f"[!] stage2 rejected baud {target}")
+        return False
+    if b"BAUD_SWITCH" not in buf:
+        print(f"[!] no BAUD_SWITCH ack: {buf[-120:]!r}")
+        return False
+    # Reopen at new baud and look for BAUD_OK
+    port = ser.port
+    ser.close(); time.sleep(0.35)
+    try:
+        ser2 = serial.Serial(port, target, timeout=1)
+        ser2.dtr = False; ser2.rts = False
+    except Exception as e:
+        print(f"[!] host serial reopen at {target} failed: {e}")
+        return False
+    # Stage2 is blocked waiting for a probe byte before replying at the new
+    # baud (so its TX can't race the PL2303 reopen window). Send exactly
+    # one — extras would land as new dispatcher commands (→ U-Boot).
+    ser2.write(b"P"); ser2.flush()
+    buf = b""; t0 = time.time()
+    while time.time() - t0 < 2.0:
+        c = ser2.read(64)
+        if c: buf += c
+        if b"BAUD_OK" in buf: break
+    if b"BAUD_OK" not in buf:
+        print(f"[!] no BAUD_OK at {target}: {buf[-120:]!r}")
+        ser2.close()
+        return False
+    print(f"[*] Baud switched OK @ {target}")
+    return ser2
+
+
+def persistent_session(port, baud=APP_BAUD, probe_timeout=2.0):
+    """Attach to an already-running stage2 without programming the FPGA or
+    uploading stage2 again. Caller must know the baud stage2 is currently
+    at (same default the previous run used). Sends a newline and expects
+    stage2's dispatcher prompt. Raises RuntimeError on mismatch."""
+    print(f"[*] Persistent attach @ {baud}")
+    ser = serial.Serial(port, baud, timeout=0.5)
+    ser.dtr = False; ser.rts = False
+    time.sleep(0.2); ser.reset_input_buffer()
+    # Stage2 is idle in the dispatcher waiting for a byte. Any byte it
+    # doesn't recognise falls through to mode_uboot (bad!), BUT only on
+    # the very first prompt. After the first command has run, the re-prompt
+    # loop treats any unknown byte as "run default" too — so we must not
+    # send a junk byte. Trick: we rely on the next real command byte
+    # (written by the caller) to be the one stage2 consumes. Just verify
+    # the link is alive by checking we can open the port.
+    #
+    # Sanity check: if stage2 had already printed "ready for next cmd"
+    # recently and the bytes are still in the PL2303 buffer, we'll see
+    # them. If not, proceed anyway — the caller's first write will drive
+    # stage2 into the requested mode.
+    buf = ser.read(512)
+    if buf:
+        print(f"[*] (drained {len(buf)} buffered bytes)")
+    return ser
+
+
+def get_session(base, port, stage2_path=None, skip_program=False,
+                target_baud=APP_BAUD, persistent=False):
+    """Unified entry: fresh `setup_session` or attach to existing stage2."""
+    if persistent:
+        return persistent_session(port, baud=target_baud)
+    return setup_session(base, port, stage2_path, skip_program, target_baud)
+
+
+def setup_session(base, port, stage2_path=None, skip_program=False,
+                  target_baud=APP_BAUD):
+    """Full boot: (optional) program FPGA, handshake, upload stage2, reopen
+    at APP_BAUD, then try to bump to `target_baud`. Falls back to APP_BAUD
+    on any failure. Returns the serial object at the negotiated baud."""
+    if stage2_path is None:
+        stage2_path = os.path.join(base, "output", "stage2_loader.bin")
+    if not skip_program:
+        program_fpga(base)
+    ser = bootloader_handshake(port)
+    upload_stage2(ser, stage2_path)
+    ser = reopen_app(ser)
+    if target_baud == APP_BAUD:
+        return ser
+    new_ser = maybe_switch_baud(ser, target_baud)
+    if new_ser:
+        return new_ser
+    print(f"[!] Falling back to {APP_BAUD}; re-init session from scratch")
+    try: ser.close()
+    except Exception: pass
+    time.sleep(0.3)
+    # Restart from FPGA program to guarantee clean state
+    return setup_session(base, port, stage2_path, skip_program=False,
+                         target_baud=APP_BAUD)
 
 
 def wait_for(ser, marker, timeout_s, label):

@@ -189,18 +189,19 @@ For the common case of "I just tweaked `/init`", rewriting all 2966 sectors of t
 Because LBAs are fixed, `sd_update.py` can rewrite only the header + the slot(s) that changed — typically just **7 sectors (~10 s total, ~1 s of actual SD write)** instead of 163 s. Before writing, it reads the on-card header via a new stage2 `R` mode and verifies `magic` / `layout_version` / LBA constants match `sd_layout.py`; if the layout has drifted (e.g. you bumped a slot size) it refuses and tells you to run `sd_pack.py` first.
 
 ```bash
-# Only iterating on /init or apps inside initramfs:
+# One-shot /init edit-test loop (default; uses 230400 baud + persistent stage2):
 vim sw/initramfs/init.c
 make -C sw/initramfs LINUX_DIR=../../linux-6.6.83
 cp sw/initramfs/neo_initramfs.cpio.gz output/
-python3 host/sd_update.py --port /dev/ttyUSB0   # ~10s (7 sectors)
-python3 host/boot_sd.py   --port /dev/ttyUSB0   # ~150s to shell
+python3 host/boot_sd.py --update        # update init slot + boot, ~17s write
+# Add --update-dtb / --update-kernel for other slots; --update-verify
+# re-reads the header after writing to sanity-check.
 
-# If you also changed the DTB:
-python3 host/sd_update.py --dtb
+# Just update without booting:
+python3 host/sd_update.py --port /dev/ttyUSB0 --verify
 
 # Full rewrite (kernel changed, layout changed, or first time on a card):
-python3 host/sd_pack.py --port /dev/ttyUSB0     # ~163s
+python3 host/sd_pack.py --port /dev/ttyUSB0     # ~99s @ 230400
 ```
 
 | Mode | Host tool | Time to shell | When to use |
@@ -208,7 +209,18 @@ python3 host/sd_pack.py --port /dev/ttyUSB0     # ~163s
 | xmodem | `boot_linux.py` | ~243 s | No SD card, or debugging stage2 |
 | SD blob | `boot_sd.py` | ~150 s | Daily development (after one-time `sd_pack.py`) |
 
-Stage2 loader modes (UART command after stage2 is uploaded): `l`=xmodem, `s`=SD smoke test, `d`=SD dump, `w`/`W`=SD write test / multi-block write, `b`=boot from SD blob.
+### Host/stage2 optimizations (Phase 1-6)
+
+The SD path above is further sped up by six stacked optimizations:
+
+1. **UART baud bump to 230400** with host probe-byte sync and auto-fallback to 115200. Stage2 mode `B`; shared via `host/sd_proto.setup_session()`. `sd_pack.py`: **165 s → 99 s**.
+2. **Persistent stage2** — dispatcher idles forever between commands; `--persistent --baud 230400` on any host tool skips FPGA program + handshake + upload. `sd_update.py`: **39 s → 17 s**.
+3. **`boot_sd.py --update`** — one-shot edit-update-boot with automatic fast-baud → console-baud handoff before the kernel jump.
+4. **`sd_update.py --verify`** — re-reads header via mode `R` after writing and compares every field.
+5. **Parametric `sd_dump.py --lba/--count/--hex`** — stage2 mode `d` now takes LBA+count over UART (cap 2 MB) and returns to the dispatcher, so dumps chain under `--persistent`.
+6. **`boot_sd.py` build-tag check** — prints `on-card vs local` sizes per slot before sending `'b'`, marking each `✓` or `✗ STALE`. Catches a stale SD before a ~150 s boot cycle. Skip with `--no-check`.
+
+Stage2 loader modes (UART command after stage2 is uploaded): `l`=xmodem, `s`=SD smoke test, `d`=SD dump (parametric), `w`/`W`=write test / multi-segment write, `R`=read header, `B`=set baud, `b`=boot from SD blob.
 
 ## System Architecture
 

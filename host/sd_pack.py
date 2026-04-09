@@ -16,8 +16,7 @@ import argparse, os, sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import sd_layout as L
-from sd_proto import (program_fpga, bootloader_handshake, upload_stage2,
-                      reopen_app, multi_seg_write)
+from sd_proto import get_session, multi_seg_write, BAUD_CANDIDATES
 
 
 def main():
@@ -27,6 +26,10 @@ def main():
     ap.add_argument("--dtb", default=None)
     ap.add_argument("--initrd", default=None)
     ap.add_argument("--skip-program", action="store_true")
+    ap.add_argument("--baud", type=int, default=BAUD_CANDIDATES[0],
+                    help=f"target UART baud (default {BAUD_CANDIDATES[0]})")
+    ap.add_argument("--persistent", action="store_true",
+                    help="attach to already-running stage2 (skip program/upload)")
     args = ap.parse_args()
 
     base = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -72,12 +75,10 @@ def main():
     eta = total_sec * 512 * 10 / 115200
     print(f"[0] Total {total_sec} sectors, UART eta ~{eta:.0f}s")
 
-    if not args.skip_program:
-        program_fpga(base)
-
-    ser = bootloader_handshake(args.port)
-    upload_stage2(ser, stage2)
-    ser = reopen_app(ser)
+    ser = get_session(base, args.port, stage2,
+                      skip_program=args.skip_program,
+                      target_baud=args.baud,
+                      persistent=args.persistent)
 
     multi_seg_write(ser, segments)
     ser.close()
