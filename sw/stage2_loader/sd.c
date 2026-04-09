@@ -327,48 +327,89 @@ void sd_write_test(void)
     uart_puts_ext("WRITE_OK\n");
 }
 
-/* ── Multi-block write: host streams N sectors, we write LBA 0..N-1 ──────
- * Protocol:
+/* ── Multi-segment write ──────────────────────────────────────────────────
+ * Protocol (supports writing disjoint LBA regions in one session):
  *   stage2: "MW_READY\n"
- *   host:   4 bytes little-endian N (sector count)
+ *   host:   u32 seg_count (1..16)
  *   stage2: "MW_GO\n"
- *   host:   N*512 raw bytes
- *   stage2: "MW_DONE\n" or "MW_FAIL lba=<x> rc=<r>\n"
+ *   for each segment:
+ *     host: u32 start_lba
+ *     host: u32 sec_count
+ *     for i in 0..sec_count-1:
+ *       host:   512 B
+ *       stage2: 'K'              (per-block ACK, flow control)
+ *   stage2: "MW_DONE\n" or "MW_FAIL ...\n"
  */
+static uint32_t recv_u32(void)
+{
+    uint32_t v = 0;
+    for (int i = 0; i < 4; i++)
+        v |= ((uint32_t)uart_raw_recv()) << (8 * i);
+    return v;
+}
+
 void sd_write_multi(void)
 {
     if (sd_init()) { uart_puts_ext("[sd] mw: init FAIL\r\n"); return; }
 
     uart_puts_ext("MW_READY\n");
 
-    uint32_t n = 0;
-    for (int i = 0; i < 4; i++)
-        n |= ((uint32_t)uart_raw_recv()) << (8 * i);
-
-    if (n == 0 || n > 8192u) {           /* cap at 4 MB */
-        uart_puts_ext("MW_FAIL bad_n\n");
+    uint32_t seg_count = recv_u32();
+    if (seg_count == 0 || seg_count > 16u) {
+        uart_puts_ext("MW_FAIL bad_segs\n");
         return;
     }
 
     uart_puts_ext("MW_GO\n");
 
-    /* Per-block ACK: host must wait for 'K' after each block before
-     * sending the next 512 B. Prevents RX-FIFO overrun during SD writes. */
-    for (uint32_t lba = 0; lba < n; lba++) {
-        for (int i = 0; i < 512; i++) write_rx[i] = uart_raw_recv();
-        int rc = sd_write_block(lba, write_rx);
-        if (rc) {
-            uart_raw_byte('X');
-            uart_puts_ext("\nMW_FAIL lba=");
-            uart_puthex32_ext(lba);
-            uart_puts_ext(" rc=");
-            uart_puthex32_ext((uint32_t)(int32_t)rc);
+    for (uint32_t s = 0; s < seg_count; s++) {
+        uint32_t start_lba = recv_u32();
+        uint32_t sec_count = recv_u32();
+
+        /* Cap: a single segment at most 8192 sectors (4 MB). */
+        if (sec_count == 0 || sec_count > 8192u) {
+            uart_puts_ext("\nMW_FAIL bad_count seg=");
+            uart_puthex32_ext(s);
             uart_puts_ext("\n");
             return;
         }
-        uart_raw_byte('K');
+
+        for (uint32_t i = 0; i < sec_count; i++) {
+            for (int j = 0; j < 512; j++) write_rx[j] = uart_raw_recv();
+            int rc = sd_write_block(start_lba + i, write_rx);
+            if (rc) {
+                uart_raw_byte('X');
+                uart_puts_ext("\nMW_FAIL lba=");
+                uart_puthex32_ext(start_lba + i);
+                uart_puts_ext(" rc=");
+                uart_puthex32_ext((uint32_t)(int32_t)rc);
+                uart_puts_ext("\n");
+                return;
+            }
+            uart_raw_byte('K');
+        }
     }
     uart_puts_ext("\nMW_DONE\n");
+}
+
+/* ── Read LBA 0 header back to host ───────────────────────────────────────
+ * Used by sd_update.py to verify on-card layout before partial updates.
+ *   stage2: "RD_READY\n"
+ *   stage2: 512 raw bytes (LBA 0 contents)
+ *   stage2: "\nRD_DONE\n"
+ */
+void sd_read_header(void)
+{
+    if (sd_init()) { uart_puts_ext("[sd] rd: init FAIL\r\n"); return; }
+
+    if (sd_read_block(0, write_rx)) {
+        uart_puts_ext("RD_FAIL\n");
+        return;
+    }
+
+    uart_puts_ext("RD_READY\n");
+    for (int i = 0; i < 512; i++) uart_raw_byte(write_rx[i]);
+    uart_puts_ext("\nRD_DONE\n");
 }
 
 /* ── Multi-block read into contiguous memory ──────────────────────────── */

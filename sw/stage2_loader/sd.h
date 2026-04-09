@@ -12,6 +12,7 @@ void sd_smoke(void);
 void sd_dump(uint32_t n_blocks);
 void sd_write_test(void);
 void sd_write_multi(void);
+void sd_read_header(void);
 int  sd_read_many(uint32_t lba, uint32_t n_blocks, uint8_t *dst);
 
 #endif

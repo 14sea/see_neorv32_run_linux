@@ -173,15 +173,34 @@ Reaches the shell prompt in **~150 s** (vs ~243 s for xmodem boot, saving ~90 s 
 
 **Decoupled kernel / initramfs:** The kernel is built with `CONFIG_INITRAMFS_SOURCE=""` — initramfs is **not embedded** in the Image. Stage2 loads Image / DTB / initramfs as three independent sections from the SD blob, then patches the DTB's `chosen/linux,initrd-end` sentinel (`0xC0DEDEAD`) in RAM with the real end address before jumping to the kernel. Linux then unpacks the initramfs from the address passed via DT `chosen` properties.
 
-This means **changing init or userspace apps no longer requires rebuilding the kernel**:
+This means **changing init or userspace apps no longer requires rebuilding the kernel**.
+
+### Incremental SD updates (`sd_update.py`)
+
+For the common case of "I just tweaked `/init`", rewriting all 2966 sectors of the blob is overkill. The SD blob uses fixed LBA slots (see `host/sd_layout.py`):
+
+| Slot   | Start LBA | Reserved | Current use |
+|--------|-----------|----------|-------------|
+| header | 0         | 1 sec    | magic + sizes + LBAs + `layout_version` |
+| Image  | 1         | 4000 sec (2 MB) | ~1.5 MB |
+| DTB    | 4001      | 8 sec (4 KB)    | ~1.5 KB |
+| initrd | 4009      | 4000 sec (2 MB) | ~3 KB — lots of room for apps |
+
+Because LBAs are fixed, `sd_update.py` can rewrite only the header + the slot(s) that changed — typically just **7 sectors (~10 s total, ~1 s of actual SD write)** instead of 163 s. Before writing, it reads the on-card header via a new stage2 `R` mode and verifies `magic` / `layout_version` / LBA constants match `sd_layout.py`; if the layout has drifted (e.g. you bumped a slot size) it refuses and tells you to run `sd_pack.py` first.
 
 ```bash
 # Only iterating on /init or apps inside initramfs:
 vim sw/initramfs/init.c
 make -C sw/initramfs LINUX_DIR=../../linux-6.6.83
 cp sw/initramfs/neo_initramfs.cpio.gz output/
-python3 host/sd_pack.py --port /dev/ttyUSB0    # ~166s — rewrites blob
-python3 host/boot_sd.py  --port /dev/ttyUSB0    # ~150s to shell
+python3 host/sd_update.py --port /dev/ttyUSB0   # ~10s (7 sectors)
+python3 host/boot_sd.py   --port /dev/ttyUSB0   # ~150s to shell
+
+# If you also changed the DTB:
+python3 host/sd_update.py --dtb
+
+# Full rewrite (kernel changed, layout changed, or first time on a card):
+python3 host/sd_pack.py --port /dev/ttyUSB0     # ~163s
 ```
 
 | Mode | Host tool | Time to shell | When to use |

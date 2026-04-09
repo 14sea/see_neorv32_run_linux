@@ -211,6 +211,36 @@ python3 host/boot_sd.py  --port /dev/ttyUSB0
 
 If you ever re-add `CONFIG_INITRAMFS_SOURCE=...` to the defconfig, you must also remove the `linux,initrd-*` properties from the DTS (or Linux will try to unpack both and fail).
 
+### Incremental SD updates (`sd_update.py`)
+
+The SD blob uses **fixed LBA slots** defined in `host/sd_layout.py`:
+
+```
+LBA 0            header (magic + sizes + LBAs + layout_version)
+LBA 1..4000      Image   (reserve 2 MB)
+LBA 4001..4008   DTB     (reserve 4 KB)
+LBA 4009..8008   initrd  (reserve 2 MB)
+```
+
+Fixed LBAs mean `host/sd_update.py` can rewrite only the header + the slot(s) that changed — init-only update is **7 sectors ≈ 10 s total** vs 163 s for a full `sd_pack.py`. The header records `layout_version=1` plus the slot LBAs and max sizes, so updates are self-describing and layout drift is caught.
+
+**Safety checks** in `sd_update.py` (do not remove):
+1. **Slot overflow** — refuses to write if any section exceeds its reserved sectors
+2. **Layout verification** — reads the on-card header via stage2 mode `R` first, aborts with "run sd_pack.py first" if magic / `layout_version` / LBAs don't match `sd_layout.py`
+
+**New stage2 pieces** (`sw/stage2_loader/`):
+- `sd.c:sd_write_multi()` — protocol bumped: host sends `u32 seg_count`, then per segment `{u32 start_lba, u32 sec_count, sec_count*512 B}` with per-block `K` ACK. Backward-incompatible with the old single-count protocol (but host is in this repo, so not an issue).
+- `sd.c:sd_read_header()` — mode `R` reads LBA 0 and streams it back wrapped in `RD_READY\n…512 B…\nRD_DONE\n`.
+- `main.c` — mode dispatcher is now a loop; non-terminal modes (`R`, `W`, `s`, `w`) return to the loop so the host can chain `R → W` in one UART session. Terminal modes (`l`, `b`, `d`, `u`) still never return.
+
+**Host tools** (`host/`):
+- `sd_layout.py` — single source of truth for slot constants. Changing these is a layout bump → all cards must be re-flashed with `sd_pack.py`.
+- `sd_proto.py` — shared FPGA-program / bootloader-handshake / stage2-upload / multi-segment-write / read-header helpers. `wait_for()` returns the bytes AFTER the marker so callers don't lose raw payload that arrived early (critical for `read_header`).
+- `sd_pack.py` — 4 segments: header, Image, DTB, initrd. Slot overflow checks.
+- `sd_update.py` — default writes header + initrd. `--dtb` adds DTB, `--kernel` adds Image, `--no-initrd` skips initrd. Always rewrites header so sizes stay truthful.
+
+**Stage2 size budget** is now **~7580 / 8192 B** (~610 B margin).
+
 ## Architecture
 
 ### Boot sequence (4 stages)

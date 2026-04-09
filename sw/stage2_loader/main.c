@@ -514,28 +514,38 @@ int main(void)
     }
 
     /* Wait for mode selection: 'l'=Linux xmodem, 's'=SD smoke test, else U-Boot */
-    uart_puts("[stage2] l=xmodem s=smoke d=dump256K w=wtest W=wmulti b=bootSD else=U-Boot\r\n");
+    uart_puts("[stage2] l=xmodem s=smoke d=dump w=wtest W=wmulti R=rdhdr b=bootSD else=U-Boot\r\n");
     int mode = uart_getc_timeout(3000);
 
-    if (mode == 'l') {
-        mode_linux();
-    } else if (mode == 's') {
-        sd_smoke();
-        uart_puts("[stage2] smoke done, halting\r\n");
-        while (1) { }
-    } else if (mode == 'd') {
-        sd_dump(512);
-        while (1) { }
-    } else if (mode == 'w') {
-        sd_write_test();
-        while (1) { }
-    } else if (mode == 'W') {
-        sd_write_multi();
-        while (1) { }
-    } else if (mode == 'b') {
-        mode_sd_boot();
-    } else {
-        mode_uboot();
+    /* Non-terminal modes (R, W, s, w) return to the dispatcher so the
+     * host can chain them in one session — sd_update.py relies on
+     * R then W. Terminal modes (l, b, d, default=uboot) never return. */
+    while (1) {
+        if (mode == 'l') {
+            mode_linux();              /* jumps to kernel, no return */
+        } else if (mode == 'b') {
+            mode_sd_boot();            /* jumps to kernel, no return */
+        } else if (mode == 'd') {
+            sd_dump(512);
+            while (1) { }              /* dump halts (no use case to chain) */
+        } else if (mode == 's') {
+            sd_smoke();
+        } else if (mode == 'w') {
+            sd_write_test();
+        } else if (mode == 'W') {
+            sd_write_multi();
+        } else if (mode == 'R') {
+            sd_read_header();
+        } else {
+            mode_uboot();              /* loads U-Boot, no return */
+        }
+        /* Wait for next command. Long timeout so host has time. */
+        uart_puts("[stage2] ready for next cmd\r\n");
+        mode = uart_getc_timeout(30000);
+        if (mode < 0) {
+            uart_puts("[stage2] idle, halting\r\n");
+            while (1) { }
+        }
     }
 
     return 0;

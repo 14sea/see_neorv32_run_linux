@@ -173,15 +173,34 @@ python3 host/boot_sd.py --port /dev/ttyUSB0
 
 **内核与 initramfs 解耦：** 内核现在以 `CONFIG_INITRAMFS_SOURCE=""` 编译 —— initramfs **不再嵌入** Image。stage2 从 SD blob 中把 Image / DTB / initramfs 作为三段独立数据读入 SDRAM，然后在跳转前 patch DTB `chosen/linux,initrd-end` 的 sentinel (`0xC0DEDEAD`) 为真实的结束地址。内核再根据 DT `chosen` 里的地址解包 initramfs。
 
-这意味着**修改 init 或用户态应用不再需要重新编译内核**：
+这意味着**修改 init 或用户态应用不再需要重新编译内核**。
+
+### 增量 SD 更新（`sd_update.py`）
+
+"我只是改了一下 /init" 这种最常见的场景，重写整个 2966 sector 的 blob 太浪费了。SD blob 使用固定 LBA 槽位（见 `host/sd_layout.py`）：
+
+| 槽位   | 起始 LBA | 预留        | 目前使用 |
+|--------|----------|-------------|----------|
+| header | 0        | 1 sec       | magic + 尺寸 + LBAs + `layout_version` |
+| Image  | 1        | 4000 sec (2 MB) | ~1.5 MB |
+| DTB    | 4001     | 8 sec (4 KB)    | ~1.5 KB |
+| initrd | 4009     | 4000 sec (2 MB) | ~3 KB — 有大把空间留给应用 |
+
+由于 LBA 固定，`sd_update.py` 可以只重写 header + 发生变动的槽位 —— 通常只要 **7 个 sector（~10 s 总时间，其中实际写 SD 只用 ~1 s）**，而不是 163 s。写入前，它会通过新增的 stage2 `R` 模式读回卡上的 header，验证 `magic` / `layout_version` / LBA 常数是否和 `sd_layout.py` 一致；如果布局漂移了（例如你改了某个槽位大小），它会拒绝执行并提醒你先跑 `sd_pack.py`。
 
 ```bash
 # 只修改 /init 或 initramfs 里的应用时：
 vim sw/initramfs/init.c
 make -C sw/initramfs LINUX_DIR=../../linux-6.6.83
 cp sw/initramfs/neo_initramfs.cpio.gz output/
-python3 host/sd_pack.py --port /dev/ttyUSB0    # ~166s 重写 blob
-python3 host/boot_sd.py  --port /dev/ttyUSB0    # ~150s 到 shell
+python3 host/sd_update.py --port /dev/ttyUSB0   # ~10s（7 个 sector）
+python3 host/boot_sd.py   --port /dev/ttyUSB0   # ~150s 到 shell
+
+# 如果 DTB 也改了：
+python3 host/sd_update.py --dtb
+
+# 完整重写（内核变了、布局变了、或第一次用这张卡）：
+python3 host/sd_pack.py --port /dev/ttyUSB0     # ~163s
 ```
 
 | 模式 | 主机脚本 | 到 shell 的时间 | 使用场景 |
