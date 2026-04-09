@@ -41,7 +41,7 @@ BASE + 0x4008 : MTIMECMP[1] (hart 1, 不用管)
 BASE + 0xBFF8 : MTIME       (8 bytes, 全局定時器)
 ```
 
-NEORV32 的 CLINT 結構體 ([neorv32_clint.h](file:///wsl.localhost/Ubuntu/home/test/fpga/neorv32_demo/neorv32/sw/lib/include/neorv32_clint.h#L25-L29))：
+NEORV32 的 CLINT 結構體 ([neorv32_clint.h](neorv32/sw/lib/include/neorv32_clint.h#L25-L29))：
 
 ```c
 typedef volatile struct {
@@ -73,7 +73,7 @@ U-Boot> md 0xFFF4BFF8 2    # 再讀一次，值應該更大
 
 ### 1.2 增大 UART TX/RX FIFO（推薦改動）
 
-當前配置 FIFO 深度為 1（[ax301_top.vhd](file:///wsl.localhost/Ubuntu/home/test/fpga/neorv32_demo/rtl/ax301_top.vhd#L139-L140)）：
+當前配置 FIFO 深度為 1（[ax301_top.vhd](rtl/ax301_top.vhd#L139-L140)）：
 ```vhdl
 IO_UART0_RX_FIFO => 1,   -- FIFO 深度 = 2^1 = 2 entries
 IO_UART0_TX_FIFO => 1,   -- FIFO 深度 = 2^1 = 2 entries
@@ -130,7 +130,7 @@ SPI 大約消耗 200-300 LE。目前有 2100+ LE 剩餘，可行。
 
 ### 1.5 RTL 修改摘要
 
-#### [MODIFY] [ax301_top.vhd](file:///wsl.localhost/Ubuntu/home/test/fpga/neorv32_demo/rtl/ax301_top.vhd)
+#### [MODIFY] [ax301_top.vhd](rtl/ax301_top.vhd)
 
 ```diff
   -- Peripherals: only what we need
@@ -177,7 +177,6 @@ sudo apt-get install -y \
 ### 2.2 下載 Buildroot
 
 ```bash
-cd /home/test
 git clone https://github.com/buildroot/buildroot.git
 cd buildroot
 git checkout 2024.02.x   # LTS 分支，穩定
@@ -232,8 +231,8 @@ cat /sys/firmware/devicetree/base/chosen/bootargs
 ### 3.1 目錄結構
 
 ```bash
-mkdir -p /home/test/neorv32-linux
-cd /home/test/neorv32-linux
+mkdir -p ${PROJECT_DIR}
+cd ${PROJECT_DIR}
 
 mkdir -p board/neorv32_ax301/
 mkdir -p configs/
@@ -243,7 +242,7 @@ mkdir -p package/neorv32-uart-driver/
 
 最終結構：
 ```
-/home/test/neorv32-linux/
+${PROJECT_DIR}/
 ├── board/neorv32_ax301/
 │   ├── neorv32_ax301.dts          ← Device Tree 源碼
 │   ├── linux.config               ← Kernel 配置片段
@@ -433,7 +432,7 @@ earlycon 是 kernel 啟動最早期的輸出通道。沒有它，你看不到任
 
 earlycon 只需要一個 `putchar()` 函數，**不需要中斷**，純 polling。
 
-NEORV32 UART 寄存器佈局（[neorv32_uart.h](file:///wsl.localhost/Ubuntu/home/test/fpga/neorv32_demo/neorv32/sw/lib/include/neorv32_uart.h#L26-L29)）：
+NEORV32 UART 寄存器佈局（[neorv32_uart.h](neorv32/sw/lib/include/neorv32_uart.h#L26-L29)）：
 ```
 offset 0x00: CTRL 寄存器 (32-bit)
   bit 0:     EN (全局使能)
@@ -639,7 +638,7 @@ NEORV32 的 FIRQ（Fast Interrupt Request）系統：
 
 ```bash
 # 假設 kernel 源碼在 buildroot output 中
-KERN_SRC=/home/test/buildroot/output/build/linux-6.6/
+KERN_SRC=${BUILDROOT}/output/build/linux-6.6/
 
 # 複製驅動文件
 cp earlycon-neorv32.c $KERN_SRC/drivers/tty/serial/
@@ -665,10 +664,10 @@ config SERIAL_NEORV32
 ### 5.2 構建 Kernel + initramfs
 
 ```bash
-cd /home/test/buildroot
+cd ${BUILDROOT}
 
 # 如果使用外部樹：
-# make BR2_EXTERNAL=/home/test/neorv32-linux neorv32_ax301_defconfig
+# make BR2_EXTERNAL=${PROJECT_DIR} neorv32_ax301_defconfig
 
 # 或者手動配置
 make menuconfig

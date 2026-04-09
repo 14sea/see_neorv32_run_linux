@@ -41,7 +41,7 @@ BASE + 0x4008 : MTIMECMP[1] (hart 1, ignore)
 BASE + 0xBFF8 : MTIME       (8 bytes, global timer)
 ```
 
-NEORV32's CLINT structure ([neorv32_clint.h](file:///wsl.localhost/Ubuntu/home/test/fpga/neorv32_demo/neorv32/sw/lib/include/neorv32_clint.h#L25-L29)):
+NEORV32's CLINT structure ([neorv32_clint.h](neorv32/sw/lib/include/neorv32_clint.h#L25-L29)):
 
 ```c
 typedef volatile struct {
@@ -73,7 +73,7 @@ U-Boot> md 0xFFF4BFF8 2    # Read again, value should be larger
 
 ### 1.2 Increase UART TX/RX FIFO (Recommended)
 
-Current FIFO depth configuration is 1 ([ax301_top.vhd](file:///wsl.localhost/Ubuntu/home/test/fpga/neorv32_demo/rtl/ax301_top.vhd#L139-L140)):
+Current FIFO depth configuration is 1 ([ax301_top.vhd](rtl/ax301_top.vhd#L139-L140)):
 ```vhdl
 IO_UART0_RX_FIFO => 1,   -- FIFO depth = 2^1 = 2 entries
 IO_UART0_TX_FIFO => 1,   -- FIFO depth = 2^1 = 2 entries
@@ -130,7 +130,7 @@ However, **do not enable it initially** — wait until Linux is running, then co
 
 ### 1.5 RTL Changes Summary
 
-#### [MODIFY] [ax301_top.vhd](file:///wsl.localhost/Ubuntu/home/test/fpga/neorv32_demo/rtl/ax301_top.vhd)
+#### [MODIFY] [ax301_top.vhd](rtl/ax301_top.vhd)
 
 ```diff
   -- Peripherals: only what we need
@@ -177,7 +177,6 @@ sudo apt-get install -y \
 ### 2.2 Download Buildroot
 
 ```bash
-cd /home/test
 git clone https://github.com/buildroot/buildroot.git
 cd buildroot
 git checkout 2024.02.x   # LTS branch, stable
@@ -232,8 +231,8 @@ cat /sys/firmware/devicetree/base/chosen/bootargs
 ### 3.1 Directory Structure
 
 ```bash
-mkdir -p /home/test/neorv32-linux
-cd /home/test/neorv32-linux
+mkdir -p ${PROJECT_DIR}
+cd ${PROJECT_DIR}
 
 mkdir -p board/neorv32_ax301/
 mkdir -p configs/
@@ -243,7 +242,7 @@ mkdir -p package/neorv32-uart-driver/
 
 Final structure:
 ```
-/home/test/neorv32-linux/
+${PROJECT_DIR}/
 ├── board/neorv32_ax301/
 │   ├── neorv32_ax301.dts          ← Device Tree source
 │   ├── linux.config               ← Kernel config fragment
@@ -433,7 +432,7 @@ earlycon is the kernel's earliest output channel during boot. Without it, you wo
 
 earlycon only needs a `putchar()` function, **no interrupts**, pure polling.
 
-NEORV32 UART register layout ([neorv32_uart.h](file:///wsl.localhost/Ubuntu/home/test/fpga/neorv32_demo/neorv32/sw/lib/include/neorv32_uart.h#L26-L29)):
+NEORV32 UART register layout ([neorv32_uart.h](neorv32/sw/lib/include/neorv32_uart.h#L26-L29)):
 ```
 offset 0x00: CTRL register (32-bit)
   bit 0:     EN (global enable)
@@ -639,7 +638,7 @@ NEORV32's FIRQ (Fast Interrupt Request) system:
 
 ```bash
 # Assuming kernel source is in the buildroot output
-KERN_SRC=/home/test/buildroot/output/build/linux-6.6/
+KERN_SRC=${BUILDROOT}/output/build/linux-6.6/
 
 # Copy driver files
 cp earlycon-neorv32.c $KERN_SRC/drivers/tty/serial/
@@ -665,10 +664,10 @@ config SERIAL_NEORV32
 ### 5.2 Build Kernel + initramfs
 
 ```bash
-cd /home/test/buildroot
+cd ${BUILDROOT}
 
 # If using external tree:
-# make BR2_EXTERNAL=/home/test/neorv32-linux neorv32_ax301_defconfig
+# make BR2_EXTERNAL=${PROJECT_DIR} neorv32_ax301_defconfig
 
 # Or configure manually
 make menuconfig

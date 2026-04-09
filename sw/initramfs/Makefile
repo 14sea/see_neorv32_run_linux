@@ -4,9 +4,13 @@
 # gen_init_cpio is built from kernel source (usr/gen_init_cpio.c)
 # to create device nodes without root/fakeroot.
 
-# init runs as a Linux userspace binary — must use a Linux toolchain (supports PIE).
-# The bare-metal riscv-none-elf- toolchain does NOT support PIE.
-RISCV_LINUX_PREFIX ?= /home/test/buildroot/output/host/bin/riscv32-buildroot-linux-gnu-
+# init runs as a Linux userspace binary — must use a Linux toolchain
+# (supports static-PIE). The bare-metal riscv-none-elf- toolchain does
+# NOT support -fpie, so you need a separate glibc/musl RISC-V toolchain
+# such as the one from Buildroot (output/host/bin/riscv32-buildroot-linux-gnu-).
+# Override on the command line or via environment:
+#   make RISCV_LINUX_PREFIX=/path/to/riscv32-buildroot-linux-gnu-
+RISCV_LINUX_PREFIX ?= riscv32-buildroot-linux-gnu-
 CC = $(RISCV_LINUX_PREFIX)gcc
 STRIP = $(RISCV_LINUX_PREFIX)strip
 HOSTCC = gcc

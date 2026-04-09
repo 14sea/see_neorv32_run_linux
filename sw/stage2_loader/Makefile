@@ -2,7 +2,10 @@
 
 MARCH = rv32imc_zicsr_zifencei
 
-RISCV_PREFIX = /home/test/xpack-riscv-none-elf-gcc-14.2.0-3/bin/riscv-none-elf-
+# xPack RISC-V bare-metal toolchain. Override on the command line or via
+# environment if `riscv-none-elf-gcc` is not already on $PATH:
+#   make RISCV_PREFIX=/path/to/bin/riscv-none-elf-
+RISCV_PREFIX ?= riscv-none-elf-
 
 EFFORT = -Os
 

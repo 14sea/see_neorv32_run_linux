@@ -30,7 +30,7 @@ Then paste the contents of `init_prompt.txt` as your first message. Claude Code 
 
 | Component | Spec |
 |-----------|------|
-| **Board** | Heijin (黑金) AX301 |
+| **Board** | Heijin AX301 |
 | **FPGA** | Altera Cyclone IV E EP4CE6F17C8 (6,272 LEs) |
 | **CPU** | NEORV32 RV32IMAC, 50 MHz, M-mode only |
 | **RAM** | 32 MB SDRAM (HY57V2562GTR) |

@@ -41,8 +41,8 @@ All source code is included. Build order matters — later steps depend on earli
 ### Prerequisites
 
 - Intel Quartus Prime Lite 21.1+ (`~/intelFPGA_lite/21.1/quartus/bin` in PATH)
-- xPack RISC-V GCC 14.2.0 (`/home/test/xpack-riscv-none-elf-gcc-14.2.0-3/bin/`) — for kernel and stage2. **MUST use this specific toolchain** — see "Compiler constraint" below.
-- Buildroot Linux GCC (`/home/test/buildroot/output/host/bin/riscv32-buildroot-linux-gnu-`) — for initramfs init ONLY (needs PIE support). Do NOT use this for the kernel.
+- xPack RISC-V GCC 14.2.0 (`riscv-none-elf-gcc`) — for kernel and stage2. **MUST use this specific version** — see "Compiler constraint" below. Install from https://github.com/xpack-dev-tools/riscv-none-elf-gcc-xpack and put the `bin/` directory on `$PATH`.
+- A glibc/musl RISC-V Linux toolchain (`riscv32-buildroot-linux-gnu-gcc` or similar) — for initramfs init ONLY (needs static-PIE support; the bare-metal `riscv-none-elf-` toolchain cannot produce PIE executables). Buildroot is the easiest source; its `output/host/bin/` prefix works as-is. Override with `make RISCV_LINUX_PREFIX=...` when building `sw/initramfs/`.
 - CMake, libftdi1-dev, libusb-1.0-0-dev (for openFPGALoader)
 - Device tree compiler: `dtc`
 - Python 3 with `pyserial`
@@ -108,8 +108,8 @@ cd ../../
 sed "s|CONFIG_INITRAMFS_SOURCE=.*|CONFIG_INITRAMFS_SOURCE=\"$(pwd)/output/neo_initramfs.cpio.gz\"|" \
     board/linux_defconfig > linux-6.6.83/arch/riscv/configs/neorv32_ax301_defconfig
 
-# Build kernel
-export PATH=$PATH:/home/test/xpack-riscv-none-elf-gcc-14.2.0-3/bin
+# Build kernel — ensure xPack riscv-none-elf-gcc 14.2.0 is on $PATH first:
+#   export PATH=$PATH:/path/to/xpack-riscv-none-elf-gcc-14.2.0-3/bin
 cd linux-6.6.83
 make ARCH=riscv CROSS_COMPILE=riscv-none-elf- neorv32_ax301_defconfig
 make ARCH=riscv CROSS_COMPILE=riscv-none-elf- -j$(nproc)
@@ -293,8 +293,7 @@ python3 host/boot_sd.py --update         # ~17 s update + boot
 - **RCU/async made synchronous** — `srcutiny` grace periods forced synchronous; `populate_rootfs()` called directly; `async_synchronize_full()` has 120s timeout.
 
 ### Cross-compiler toolchain
-Path: `/home/test/xpack-riscv-none-elf-gcc-14.2.0-3/bin/riscv-none-elf-`
-The stage2 Makefile has this hardcoded; override with `RISCV_PREFIX`. Kernel uses `riscv-none-elf-` as `CROSS_COMPILE` (must be in PATH).
+Prefix: `riscv-none-elf-` (xPack 14.2.0). The stage2 Makefile defaults to this on `$PATH`; override with `make RISCV_PREFIX=/abs/path/to/riscv-none-elf-` if not installed system-wide. Kernel uses the same `riscv-none-elf-` prefix as `CROSS_COMPILE`.
 
 ## Important Constraints
 - Stage2 loader **must fit in 8 KB** IMEM (set via linker flags in Makefile)
