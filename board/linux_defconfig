@@ -4,9 +4,9 @@
 # CONFIG_CPU_ISOLATION is not set
 CONFIG_LOG_BUF_SHIFT=14
 CONFIG_BLK_DEV_INITRD=y
-# Embed initramfs into kernel Image (avoids DTB patching for initrd location)
-CONFIG_INITRAMFS_SOURCE="/home/test/neorv32-linux/output/neo_initramfs.cpio.gz"
-CONFIG_INITRAMFS_COMPRESSION_GZIP=y
+# External initramfs: loaded by stage2 from SD blob into SDRAM, location
+# passed to kernel via DT chosen node (linux,initrd-start/end).
+CONFIG_INITRAMFS_SOURCE=""
 # CONFIG_RD_BZIP2 is not set
 # CONFIG_RD_LZMA is not set
 # CONFIG_RD_XZ is not set

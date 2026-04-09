@@ -148,6 +148,49 @@ dtc -I dts -O dtb -o output/neorv32_ax301.dtb board/neorv32_ax301.dts
 python3 host/boot_linux.py --port /dev/ttyUSB0
 ```
 
+## 从 SD 卡快速启动（可选）
+
+UART xmodem 每次启动都要 ~145 s。为了跳过这一步，stage2 loader 可以通过 NEORV32 的硬件 SPI 外设直接从 SD 卡读取内核 blob。Linux 仍然运行在 SDRAM 中 —— **SD 卡只在启动时作为只读批量存储使用**，因此无需任何内核侧驱动。
+
+**接线**（AX301 板载 SD 槽）：`PIN_J15=SD_CLK`、`PIN_K16=SD_DI (MOSI)`、`PIN_J16=SD_DO (MISO)`、`PIN_K15=SD_NCS`。FPGA 位流需要在启用 `IO_SPI_EN=true` 的情况下重新编译（`rtl/ax301_top.vhd` 中已设好）。
+
+**一次性：将 blob 打包并写入 SD**
+
+```bash
+# 将 Image + DTB + initramfs 打包成带 NEOLNX 魔数的 blob 并流式写入 SD
+python3 host/sd_pack.py --port /dev/ttyUSB0
+```
+
+耗时 ~160 s（仅此一次）。blob 存放在 raw LBA 0 —— 没有 MBR，也没有文件系统。
+
+**之后每次启动：从 SD 加载**
+
+```bash
+python3 host/boot_sd.py --port /dev/ttyUSB0
+```
+
+大约 **~150 s** 到达 shell 提示符（xmodem 启动约 ~243 s，每次启动节省 ~90 s）。
+
+**内核与 initramfs 解耦：** 内核现在以 `CONFIG_INITRAMFS_SOURCE=""` 编译 —— initramfs **不再嵌入** Image。stage2 从 SD blob 中把 Image / DTB / initramfs 作为三段独立数据读入 SDRAM，然后在跳转前 patch DTB `chosen/linux,initrd-end` 的 sentinel (`0xC0DEDEAD`) 为真实的结束地址。内核再根据 DT `chosen` 里的地址解包 initramfs。
+
+这意味着**修改 init 或用户态应用不再需要重新编译内核**：
+
+```bash
+# 只修改 /init 或 initramfs 里的应用时：
+vim sw/initramfs/init.c
+make -C sw/initramfs LINUX_DIR=../../linux-6.6.83
+cp sw/initramfs/neo_initramfs.cpio.gz output/
+python3 host/sd_pack.py --port /dev/ttyUSB0    # ~166s 重写 blob
+python3 host/boot_sd.py  --port /dev/ttyUSB0    # ~150s 到 shell
+```
+
+| 模式 | 主机脚本 | 到 shell 的时间 | 使用场景 |
+|------|----------|-----------------|----------|
+| xmodem | `boot_linux.py` | ~243 s | 没有 SD 卡，或调试 stage2 |
+| SD blob | `boot_sd.py` | ~150 s | 日常开发（一次性 `sd_pack.py` 之后） |
+
+Stage2 loader 命令（上传 stage2 之后通过 UART 发送）：`l`=xmodem、`s`=SD smoke 测试、`d`=SD dump、`w`/`W`=SD 单块写 / 多块写测试、`b`=从 SD blob 启动。
+
 ## 系统架构
 
 ### 硬件框图

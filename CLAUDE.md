@@ -162,6 +162,55 @@ nommu#
 python3 host/test_shell.py /dev/ttyUSB0
 ```
 
+### Fast boot from SD card (optional path)
+
+The stage2 loader can boot Linux directly from an SD card via NEORV32's hardware SPI, skipping the 145 s xmodem transfer. **Linux still runs from SDRAM** — the SD card is purely read-only bulk storage at boot. No Linux kernel driver is involved.
+
+AX301 SD pins: `PIN_J15=SD_CLK`, `PIN_K16=SD_DI`, `PIN_J16=SD_DO`, `PIN_K15=SD_NCS`. Requires `IO_SPI_EN=true` in `rtl/ax301_top.vhd` (already set).
+
+**One-time** — pack Image + DTB + initramfs into a `NEOLNX`-magic blob (header at LBA 0, each section sector-padded) and stream-write it to SD:
+```bash
+python3 host/sd_pack.py --port /dev/ttyUSB0    # ~160s one-time
+```
+
+**Every boot** — stage2 reads the blob from SD into SDRAM and jumps to the kernel:
+```bash
+python3 host/boot_sd.py --port /dev/ttyUSB0    # ~150s to shell (saves ~90s vs xmodem)
+```
+
+Stage2 UART command dispatch (`sw/stage2_loader/main.c`):
+| Cmd | Mode |
+|-----|------|
+| `l` | xmodem Linux boot (legacy, `boot_linux.py`) |
+| `s` | SD smoke: init + read LBA 0 + magic check |
+| `d` | SD dump: stream first N blocks to host |
+| `w` | SD single-block write test |
+| `W` | SD multi-block write with per-block `K` ACK (used by `sd_pack.py`) |
+| `b` | SD boot: read blob → load kernel → jump (used by `boot_sd.py`) |
+
+Per-block ACK is required because NEORV32 UART RX FIFO is only 16 B and single-block SD writes take ~2 ms — without flow control the host overruns the FIFO during multi-block writes.
+
+Stage2 size budget is tight: current SD-aware build is **6960 / 8192 B**. Any new stage2 code must stay under the 8 KB IMEM cap.
+
+Re-run `sd_pack.py` only when `output/Image`, `output/neorv32_ax301.dtb`, or `output/neo_initramfs.cpio.gz` change.
+
+**Decoupled kernel / initramfs (current design):** `board/linux_defconfig` sets `CONFIG_INITRAMFS_SOURCE=""` — initramfs is NOT embedded in the Image. `board/neorv32_ax301.dts` declares under `chosen`:
+```dts
+linux,initrd-start = <0x41F80000>;
+linux,initrd-end   = <0xC0DEDEAD>;   /* sentinel, patched by stage2 */
+```
+At boot, `mode_sd_boot()` in `sw/stage2_loader/main.c` scans the loaded DTB for the 4-byte big-endian sentinel `C0 DE DE AD` and overwrites it with `0x41F80000 + initrd_sz`. The kernel then picks up the initramfs via standard `early_init_dt_check_for_initrd()`. If the sentinel is not found (exactly once), stage2 halts with an error.
+
+**What this unlocks:** iterating on `/init` or userspace apps only requires rebuilding `sw/initramfs/`, re-running `sd_pack.py`, and re-booting. The kernel Image is untouched. Full workflow:
+```bash
+make -C sw/initramfs LINUX_DIR=../../linux-6.6.83
+cp sw/initramfs/neo_initramfs.cpio.gz output/
+python3 host/sd_pack.py --port /dev/ttyUSB0
+python3 host/boot_sd.py  --port /dev/ttyUSB0
+```
+
+If you ever re-add `CONFIG_INITRAMFS_SOURCE=...` to the defconfig, you must also remove the `linux,initrd-*` properties from the DTS (or Linux will try to unpack both and fail).
+
 ## Architecture
 
 ### Boot sequence (4 stages)

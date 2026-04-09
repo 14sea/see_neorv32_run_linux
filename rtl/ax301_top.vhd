@@ -39,7 +39,12 @@ entity ax301_top is
     S_BA   : out   std_ulogic_vector(1 downto 0);
     S_A    : out   std_ulogic_vector(12 downto 0);
     S_DQM  : out   std_ulogic_vector(1 downto 0);
-    S_DB   : inout std_ulogic_vector(15 downto 0)
+    S_DB   : inout std_ulogic_vector(15 downto 0);
+    -- SD card (SPI mode)
+    SD_CLK : out   std_ulogic;
+    SD_DI  : out   std_ulogic;  -- MOSI (controller → card)
+    SD_DO  : in    std_ulogic;  -- MISO (card → controller)
+    SD_NCS : out   std_ulogic
   );
 end entity ax301_top;
 
@@ -140,7 +145,7 @@ begin
     IO_UART0_RX_FIFO => 4,   -- 2^4 = 16-entry FIFO for Linux console
     IO_UART0_TX_FIFO => 4,   -- 2^4 = 16-entry FIFO for Linux console
     -- Everything else off
-    IO_SPI_EN        => false,
+    IO_SPI_EN        => true,
     IO_SDI_EN        => false,
     IO_TWI_EN        => false,
     IO_TWD_EN        => false,
@@ -179,7 +184,19 @@ begin
     gpio_o       => gpio_out,
     -- UART0
     uart0_txd_o  => TXD,
-    uart0_rxd_i  => RXD
+    uart0_rxd_i  => RXD,
+    -- SPI (SD card)
+    spi_clk_o    => SD_CLK,
+    spi_dat_o    => SD_DI,
+    spi_dat_i    => SD_DO,
+    spi_csn_o(0) => SD_NCS,
+    spi_csn_o(1) => open,
+    spi_csn_o(2) => open,
+    spi_csn_o(3) => open,
+    spi_csn_o(4) => open,
+    spi_csn_o(5) => open,
+    spi_csn_o(6) => open,
+    spi_csn_o(7) => open
   );
 
   -- DEBUG MODE: LEDs driven by XBUS debug latches (active-low on board)

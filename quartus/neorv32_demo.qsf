@@ -129,6 +129,12 @@ set_location_assignment PIN_R10 -to S_DB[13]
 set_location_assignment PIN_T11 -to S_DB[14]
 set_location_assignment PIN_R11 -to S_DB[15]
 
+# SD card (SPI mode) — AX301 micro-SD slot
+set_location_assignment PIN_J15 -to SD_CLK
+set_location_assignment PIN_K16 -to SD_DI
+set_location_assignment PIN_J16 -to SD_DO
+set_location_assignment PIN_K15 -to SD_NCS
+
 # SDRAM I/O drive strength (from riscv_demo, proven working)
 set_instance_assignment -name CURRENT_STRENGTH_NEW 8MA -to S_*
 set_instance_assignment -name FAST_OUTPUT_REGISTER ON  -to S_*

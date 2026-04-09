@@ -24,6 +24,11 @@
 	chosen {
 		bootargs = "earlycon=neorv32,0xfff50000 console=ttyNEO0,115200";
 		stdout-path = "serial0:115200n8";
+		/* initrd-end is a sentinel (0xC0DEDEAD) patched at runtime by
+		 * stage2_loader after it knows the real initramfs size.
+		 * initrd-start is fixed (INITRD_LOAD_ADDR in stage2). */
+		linux,initrd-start = <0x41F80000>;
+		linux,initrd-end   = <0xC0DEDEAD>;
 	};
 
 	cpus {

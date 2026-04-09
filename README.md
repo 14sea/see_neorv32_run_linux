@@ -148,6 +148,49 @@ dtc -I dts -O dtb -o output/neorv32_ax301.dtb board/neorv32_ax301.dts
 python3 host/boot_linux.py --port /dev/ttyUSB0
 ```
 
+## Fast Boot from SD Card (optional)
+
+UART xmodem transfer takes ~145 s every boot. To skip it, the stage2 loader can read the kernel blob directly from an SD card over NEORV32's hardware SPI peripheral. Linux still runs from SDRAM — **the SD card is only read-only bulk storage at boot time**, so no kernel-side driver is required.
+
+**Wiring** (AX301 on-board SD slot): `PIN_J15=SD_CLK`, `PIN_K16=SD_DI (MOSI)`, `PIN_J16=SD_DO (MISO)`, `PIN_K15=SD_NCS`. The FPGA bitstream must be rebuilt with `IO_SPI_EN=true` (already set in `rtl/ax301_top.vhd`).
+
+**One-time: pack + write the blob to SD**
+
+```bash
+# Packs Image + DTB + initramfs into a NEOLNX-magic blob and streams it to SD
+python3 host/sd_pack.py --port /dev/ttyUSB0
+```
+
+This takes ~160 s (one-time). The blob lives at raw LBA 0 — no MBR / no filesystem.
+
+**Every boot: load from SD**
+
+```bash
+python3 host/boot_sd.py --port /dev/ttyUSB0
+```
+
+Reaches the shell prompt in **~150 s** (vs ~243 s for xmodem boot, saving ~90 s per boot cycle).
+
+**Decoupled kernel / initramfs:** The kernel is built with `CONFIG_INITRAMFS_SOURCE=""` — initramfs is **not embedded** in the Image. Stage2 loads Image / DTB / initramfs as three independent sections from the SD blob, then patches the DTB's `chosen/linux,initrd-end` sentinel (`0xC0DEDEAD`) in RAM with the real end address before jumping to the kernel. Linux then unpacks the initramfs from the address passed via DT `chosen` properties.
+
+This means **changing init or userspace apps no longer requires rebuilding the kernel**:
+
+```bash
+# Only iterating on /init or apps inside initramfs:
+vim sw/initramfs/init.c
+make -C sw/initramfs LINUX_DIR=../../linux-6.6.83
+cp sw/initramfs/neo_initramfs.cpio.gz output/
+python3 host/sd_pack.py --port /dev/ttyUSB0    # ~166s — rewrites blob
+python3 host/boot_sd.py  --port /dev/ttyUSB0    # ~150s to shell
+```
+
+| Mode | Host tool | Time to shell | When to use |
+|------|-----------|---------------|-------------|
+| xmodem | `boot_linux.py` | ~243 s | No SD card, or debugging stage2 |
+| SD blob | `boot_sd.py` | ~150 s | Daily development (after one-time `sd_pack.py`) |
+
+Stage2 loader modes (UART command after stage2 is uploaded): `l`=xmodem, `s`=SD smoke test, `d`=SD dump, `w`/`W`=SD write test / multi-block write, `b`=boot from SD blob.
+
 ## System Architecture
 
 ### Block Diagram

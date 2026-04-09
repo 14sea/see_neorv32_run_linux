@@ -12,6 +12,7 @@
 
 #include <neorv32.h>
 #include <stdint.h>
+#include "sd.h"
 
 #define UBOOT_LOAD_ADDR   0x40000000UL
 #define KERNEL_LOAD_ADDR  0x40000000UL
@@ -44,6 +45,11 @@ static uint32_t crc32(const uint8_t *data, uint32_t len)
 static void uart_putc(char c)  { neorv32_uart0_putc(c); }
 static void uart_puts(const char *s) { while (*s) uart_putc(*s++); }
 
+/* Non-static trampolines so sd.c can reuse without bloating its own strings. */
+void uart_putc_ext(char c)       { uart_putc(c); }
+void uart_puts_ext(const char *s){ uart_puts(s); }
+void uart_puthex32_ext(uint32_t v);
+
 static void uart_puthex32(uint32_t v)
 {
     const char hex[] = "0123456789abcdef";
@@ -51,6 +57,8 @@ static void uart_puthex32(uint32_t v)
     for (int i = 28; i >= 0; i -= 4)
         uart_putc(hex[(v >> i) & 0xF]);
 }
+
+void uart_puthex32_ext(uint32_t v) { uart_puthex32(v); }
 
 /* Diagnostic trap handler — prints mcause/mepc/mtval via UART.
  * Lives in IMEM, set as mtvec before jumping to kernel.
@@ -280,6 +288,116 @@ static void mode_uboot(void)
     uboot();
 }
 
+/* Mode 'b': Load Linux from SD card blob (header @ LBA 0) */
+struct sd_boot_hdr {
+    char     magic[8];      /* "NEOLNX\0\0" */
+    uint32_t image_sz;
+    uint32_t dtb_sz;
+    uint32_t initrd_sz;
+    uint32_t image_lba;     /* usually 1 */
+    uint32_t dtb_lba;
+    uint32_t initrd_lba;
+    uint32_t reserved[4];
+};
+
+static void __attribute__((noreturn)) jump_to_kernel(void)
+{
+    __asm__ volatile ("fence.i" ::: "memory");
+    __asm__ volatile (
+        "li a0, 0\n"
+        "li a1, %0\n"
+        "li t0, %1\n"
+        "jr t0\n"
+        :
+        : "i"(DTB_LOAD_ADDR), "i"(KERNEL_LOAD_ADDR)
+        : "a0", "a1", "t0"
+    );
+    __builtin_unreachable();
+}
+
+static void mode_sd_boot(void)
+{
+    uart_puts("[stage2] Mode: SD blob boot\r\n");
+
+    /* Init SD and read header at LBA 0 */
+    extern int sd_init(void);
+    extern int sd_read_block(uint32_t lba, uint8_t *dst);
+    extern int sd_read_many(uint32_t lba, uint32_t n, uint8_t *dst);
+
+    if (sd_init()) { uart_puts("[sd] init FAIL\r\n"); while (1) {} }
+
+    static uint8_t hdr_buf[512];
+    if (sd_read_block(0, hdr_buf)) {
+        uart_puts("[sd] read hdr FAIL\r\n"); while (1) {}
+    }
+
+    /* Verify magic "NEOLNX\0\0" */
+    const char magic[8] = { 'N','E','O','L','N','X','\0','\0' };
+    for (int i = 0; i < 8; i++) {
+        if (hdr_buf[i] != (uint8_t)magic[i]) {
+            uart_puts("[sd] bad magic\r\n"); while (1) {}
+        }
+    }
+
+    struct sd_boot_hdr *h = (struct sd_boot_hdr *)hdr_buf;
+    uart_puts("[sd] image_sz="); uart_puthex32(h->image_sz);
+    uart_puts(" dtb_sz=");       uart_puthex32(h->dtb_sz);
+    uart_puts(" initrd_sz=");    uart_puthex32(h->initrd_sz);
+    uart_puts("\r\n");
+
+    uint32_t img_blks = (h->image_sz  + 511) / 512;
+    uint32_t dtb_blks = (h->dtb_sz    + 511) / 512;
+    uint32_t ird_blks = (h->initrd_sz + 511) / 512;
+
+    uart_puts("[sd] reading Image\r\n");
+    if (sd_read_many(h->image_lba, img_blks, (uint8_t *)KERNEL_LOAD_ADDR)) {
+        uart_puts("[sd] img read FAIL\r\n"); while (1) {}
+    }
+    uart_puts("[sd] reading DTB\r\n");
+    if (sd_read_many(h->dtb_lba, dtb_blks, (uint8_t *)DTB_LOAD_ADDR)) {
+        uart_puts("[sd] dtb read FAIL\r\n"); while (1) {}
+    }
+    uart_puts("[sd] reading initrd\r\n");
+    if (sd_read_many(h->initrd_lba, ird_blks, (uint8_t *)INITRD_LOAD_ADDR)) {
+        uart_puts("[sd] initrd read FAIL\r\n"); while (1) {}
+    }
+
+    /* DTB fixup: patch chosen/linux,initrd-end sentinel 0xC0DEDEAD with
+     * the real end address (start + initrd_sz). FDT cells are big-endian. */
+    {
+        uint32_t real_end = INITRD_LOAD_ADDR + h->initrd_sz;
+        uint8_t *dtb = (uint8_t *)DTB_LOAD_ADDR;
+        uint32_t dtb_len = dtb_blks * 512;
+        /* Sentinel in big-endian byte order */
+        const uint8_t sent[4] = { 0xC0, 0xDE, 0xDE, 0xAD };
+        int patched = 0;
+        for (uint32_t i = 0; i + 4 <= dtb_len; i++) {
+            if (dtb[i]   == sent[0] && dtb[i+1] == sent[1] &&
+                dtb[i+2] == sent[2] && dtb[i+3] == sent[3]) {
+                dtb[i+0] = (real_end >> 24) & 0xFF;
+                dtb[i+1] = (real_end >> 16) & 0xFF;
+                dtb[i+2] = (real_end >>  8) & 0xFF;
+                dtb[i+3] = (real_end      ) & 0xFF;
+                patched++;
+            }
+        }
+        uart_puts("[sd] initrd-end=");
+        uart_puthex32(real_end);
+        uart_puts(" patched=");
+        uart_puthex32((uint32_t)patched);
+        uart_puts("\r\n");
+        if (patched != 1) {
+            uart_puts("[!] DTB sentinel not found — halting\r\n");
+            while (1) {}
+        }
+    }
+
+    uart_puts("[stage2] Kernel header:\r\n");
+    dump_words(KERNEL_LOAD_ADDR, 4);
+    uart_puts("[stage2] Booting Linux from SD...\r\n");
+    jump_to_kernel();
+}
+
 /* Mode 'l': Load Linux kernel + DTB + initramfs, boot directly */
 static void mode_linux(void)
 {
@@ -395,12 +513,27 @@ int main(void)
         while (1) {}
     }
 
-    /* Wait for mode selection: 'l' for Linux, anything else for U-Boot */
-    uart_puts("[stage2] Send 'l' for Linux boot, or wait for U-Boot mode\r\n");
+    /* Wait for mode selection: 'l'=Linux xmodem, 's'=SD smoke test, else U-Boot */
+    uart_puts("[stage2] l=xmodem s=smoke d=dump256K w=wtest W=wmulti b=bootSD else=U-Boot\r\n");
     int mode = uart_getc_timeout(3000);
 
     if (mode == 'l') {
         mode_linux();
+    } else if (mode == 's') {
+        sd_smoke();
+        uart_puts("[stage2] smoke done, halting\r\n");
+        while (1) { }
+    } else if (mode == 'd') {
+        sd_dump(512);
+        while (1) { }
+    } else if (mode == 'w') {
+        sd_write_test();
+        while (1) { }
+    } else if (mode == 'W') {
+        sd_write_multi();
+        while (1) { }
+    } else if (mode == 'b') {
+        mode_sd_boot();
     } else {
         mode_uboot();
     }
