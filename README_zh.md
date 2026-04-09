@@ -148,7 +148,11 @@ dtc -I dts -O dtb -o output/neorv32_ax301.dtb board/neorv32_ax301.dts
 python3 host/boot_linux.py --port /dev/ttyUSB0
 ```
 
+这是**默认路径**，只需要 FPGA + SDRAM + UART —— **不需要 SD 卡**。每次启动时，内核 / DTB / initramfs 都会通过 UART xmodem 流式传输到 SDRAM（~145 s 传输 + ~98 s 内核启动 ≈ 243 s 进入 shell）。
+
 ## 从 SD 卡快速启动（可选）
+
+> **可选** —— 仅当你把 SD 卡接到 FPGA 的 SPI 引脚时使用。上面步骤 6 的 xmodem 路径不需要任何 SD 卡。
 
 UART xmodem 每次启动都要 ~145 s。为了跳过这一步，stage2 loader 可以通过 NEORV32 的硬件 SPI 外设直接从 SD 卡读取内核 blob。Linux 仍然运行在 SDRAM 中 —— **SD 卡只在启动时作为只读批量存储使用**，因此无需任何内核侧驱动。
 

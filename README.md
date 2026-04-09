@@ -148,7 +148,11 @@ dtc -I dts -O dtb -o output/neorv32_ax301.dtb board/neorv32_ax301.dts
 python3 host/boot_linux.py --port /dev/ttyUSB0
 ```
 
+This is the **default path** and requires only FPGA + SDRAM + UART — **no SD card needed**. Kernel / DTB / initramfs are streamed to SDRAM over UART via xmodem on every boot (~145 s transfer + ~98 s kernel boot ≈ 243 s to shell).
+
 ## Fast Boot from SD Card (optional)
+
+> **Optional** — only use this if you have an SD card wired to the FPGA's SPI pins. The xmodem path in Step 6 above works without any SD card.
 
 UART xmodem transfer takes ~145 s every boot. To skip it, the stage2 loader can read the kernel blob directly from an SD card over NEORV32's hardware SPI peripheral. Linux still runs from SDRAM — **the SD card is only read-only bulk storage at boot time**, so no kernel-side driver is required.
 
