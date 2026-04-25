@@ -359,6 +359,31 @@ static void __attribute__((noreturn)) jump_to_kernel(void)
     __builtin_unreachable();
 }
 
+/* Patch DTB chosen/linux,initrd-end sentinel 0xC0DEDEAD with the real end
+ * address (INITRD_LOAD_ADDR + initrd_size). FDT cells are big-endian.
+ * Returns number of sentinels patched (caller expects exactly 1). */
+static int patch_dtb_initrd_end(uint8_t *dtb, uint32_t dtb_len, uint32_t initrd_size)
+{
+    uint32_t real_end = INITRD_LOAD_ADDR + initrd_size;
+    int patched = 0;
+    for (uint32_t i = 0; i + 4 <= dtb_len; i++) {
+        if (dtb[i]   == 0xC0 && dtb[i+1] == 0xDE &&
+            dtb[i+2] == 0xDE && dtb[i+3] == 0xAD) {
+            dtb[i+0] = (real_end >> 24) & 0xFF;
+            dtb[i+1] = (real_end >> 16) & 0xFF;
+            dtb[i+2] = (real_end >>  8) & 0xFF;
+            dtb[i+3] = (real_end      ) & 0xFF;
+            patched++;
+        }
+    }
+    uart_puts("[dtb] initrd-end=");
+    uart_puthex32(real_end);
+    uart_puts(" patched=");
+    uart_puthex32((uint32_t)patched);
+    uart_puts("\r\n");
+    return patched;
+}
+
 static void mode_sd_boot(void)
 {
     uart_puts("[stage2] Mode: SD blob boot\r\n");
@@ -406,34 +431,10 @@ static void mode_sd_boot(void)
         uart_puts("[sd] initrd read FAIL\r\n"); while (1) {}
     }
 
-    /* DTB fixup: patch chosen/linux,initrd-end sentinel 0xC0DEDEAD with
-     * the real end address (start + initrd_sz). FDT cells are big-endian. */
-    {
-        uint32_t real_end = INITRD_LOAD_ADDR + h->initrd_sz;
-        uint8_t *dtb = (uint8_t *)DTB_LOAD_ADDR;
-        uint32_t dtb_len = dtb_blks * 512;
-        /* Sentinel in big-endian byte order */
-        const uint8_t sent[4] = { 0xC0, 0xDE, 0xDE, 0xAD };
-        int patched = 0;
-        for (uint32_t i = 0; i + 4 <= dtb_len; i++) {
-            if (dtb[i]   == sent[0] && dtb[i+1] == sent[1] &&
-                dtb[i+2] == sent[2] && dtb[i+3] == sent[3]) {
-                dtb[i+0] = (real_end >> 24) & 0xFF;
-                dtb[i+1] = (real_end >> 16) & 0xFF;
-                dtb[i+2] = (real_end >>  8) & 0xFF;
-                dtb[i+3] = (real_end      ) & 0xFF;
-                patched++;
-            }
-        }
-        uart_puts("[sd] initrd-end=");
-        uart_puthex32(real_end);
-        uart_puts(" patched=");
-        uart_puthex32((uint32_t)patched);
-        uart_puts("\r\n");
-        if (patched != 1) {
-            uart_puts("[!] DTB sentinel not found — halting\r\n");
-            while (1) {}
-        }
+    if (patch_dtb_initrd_end((uint8_t *)DTB_LOAD_ADDR, dtb_blks * 512,
+                             h->initrd_sz) != 1) {
+        uart_puts("[!] DTB sentinel not found — halting\r\n");
+        while (1) {}
     }
 
     uart_puts("[stage2] Kernel header:\r\n");
@@ -466,15 +467,11 @@ static void mode_linux(void)
         (uint8_t *)INITRD_LOAD_ADDR, "initramfs");
     if (initrd_size == 0) { while (1) {} }
 
-    /* Patch DTB chosen node with initrd-start/end
-     * For simplicity, we don't patch the DTB here — the kernel
-     * bootargs already has the earlycon and console settings.
-     * initramfs is passed via a0/a1 convention or embedded.
-     *
-     * Actually, Linux needs initrd info in DTB chosen node.
-     * We'll embed initramfs in kernel instead (CONFIG_INITRAMFS_SOURCE).
-     * For now, just load all three and see what happens.
-     */
+    if (patch_dtb_initrd_end((uint8_t *)DTB_LOAD_ADDR, dtb_size,
+                             initrd_size) != 1) {
+        uart_puts("[!] DTB sentinel not found — halting\r\n");
+        while (1) {}
+    }
 
     uart_puts("\r\n[stage2] All payloads loaded:\r\n");
     uart_puts("  Kernel:  "); uart_puthex32(kernel_size); uart_puts(" bytes\r\n");
