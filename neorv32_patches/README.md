@@ -21,6 +21,38 @@ done
 
 ## Inventory
 
+### `0002-cache-amo-flush.patch` (companion to 0001)
+
+**Targets:** `rtl/core/neorv32_cache.vhd`, `S_CHECK` / `S_BYPASS` / `S_WRITE_DONE`.
+
+**Bug:** AMO requests bypass the cache (jump straight to the bus), but with
+a write-back D-cache that breaks coherence: a regular store can leave
+dirty data in the cache while the AMO reads stale memory, and after the
+AMO writes memory the cache still holds the pre-AMO value, so a later
+plain load returns the stale cached copy. Linux uses AMO for every
+spinlock / atomic / rwsem update, so this manifests as random scheduler
+errors (`bad: scheduling from the idle thread!` loops) and lock
+deadlocks during boot once the regression is in play.
+
+**Fix:** before bypassing for an AMO/uncached request, look at the cache
+line at the same index:
+- HIT, dirty → write the line back to memory first, invalidate, then
+  bypass (so the AMO sees the latest memory and no stale copy is left).
+- HIT, clean → invalidate inline, then bypass (memory is already current,
+  but the cached copy would go stale once the AMO writes memory).
+- MISS → bypass directly (no cache state to repair).
+
+`pnd_bp` becomes a sticky flag so the bypass survives the write-back
+detour, and is cleared on `S_BYPASS` ACK.
+
+**Status (2026-04-25):** functionally correct (no more "scheduling from
+idle" oops loop), BUT noticeably slow — every Linux atomic now triggers
+a full 16-word block write-back to SDRAM (~240 cycles) and an invalidate.
+Kernel boot is ~4× slower in kernel-time per milestone vs `v1.12.9`
+write-through. The fix is good enough to validate the architecture but
+will need a more targeted approach (cache-coherent AMO that goes
+through the cache instead of bypassing) before it's PR-ready.
+
 ### `0001-cpu-fence-i-drain-dcache.patch`
 
 **Targets:** `rtl/core/neorv32_cpu_control.vhd`, opcode_fence_c decode.
@@ -55,7 +87,5 @@ decoder (always assert `lsu_fence` for `opcode_fence_c`; `if_fence`
 remains gated on `funct3 LSB` so plain `fence` still doesn't bother
 the I-cache).
 
-**Status:** local-only; not yet sent upstream. Holding because we still
-have to debug a separate kernel "scheduling from idle thread" issue
-that surfaces on the post-`v1.12.9` tree once this patch lets the
-kernel start.
+**Status:** local-only; not yet sent upstream. Holding for the AMO
+coherence fix (`0002-cache-amo-flush.patch`) and a kernel-side audit.
