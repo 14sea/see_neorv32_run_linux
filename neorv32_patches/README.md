@@ -48,9 +48,13 @@ reservation under the strict policy.
 
 ## Apply
 
-The submodule is currently pinned at `v1.12.9`, which doesn't need any
-of these patches. The patches here apply on top of `origin/main` (commits
-after `v1.12.9`) and are required to bump the submodule.
+The submodule is pinned at `e0739e63` (post-`v1.12.9` `origin/main` HEAD).
+At this pointer the patches below are **required** for the kernel boot:
+without them the bumped submodule fails at SDRAM exec test (`0001`),
+breaks AMO coherence (`0002`), or livelocks the kernel CAS retry under
+IRQ load (`0004`). `0003` is diagnostic-only and optional.
+
+Apply in order (0003 depends on 0002):
 
 ```bash
 cd neorv32

@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 This project boots nommu Linux (kernel 6.6.83) on a NEORV32 RV32IMAC soft-core FPGA — the first known Linux boot on NEORV32. The NEORV32 has no MMU and no S-mode. Getting Linux running required 16 kernel patches across arch/riscv, scheduler, RCU, init, and drivers. We also found and fixed a [SC.W return value bug](https://github.com/stnolting/neorv32/pull/1520) in NEORV32's bus reservation station, enabling native atomic instructions in the kernel; the fix is now merged upstream and included in v1.12.9.
 
-The `neorv32` submodule is at the post-`v1.12.9` `origin/main` HEAD (currently `29739a83`) plus three local RTL patches in `neorv32_patches/` (`0001`, `0002`, `0004`). See `neorv32_patches/README.md` for the full inventory and rationale. The optional diagnostic counter patch (`0003`) is also included by default — it can be dropped without affecting boot.
+The `neorv32` submodule is at the post-`v1.12.9` `origin/main` HEAD (currently `e0739e63`) plus three local RTL patches in `neorv32_patches/` (`0001`, `0002`, `0004`). See `neorv32_patches/README.md` for the full inventory and rationale. The optional diagnostic counter patch (`0003`) is also included by default — it can be dropped without affecting boot.
 
 **D-cache is disabled** (`DCACHE_EN => false` in `rtl/ax301_top.vhd`). The new write-back D-cache architecture (PR #1513) requires burst-capable memory to be a net win; against the simple non-burst SDRAM controller in this project it is a net loss and triggers a `ktime_get_coarse_real_ts64` seqcount-retry livelock on hot kernel paths. With D-cache off the kernel boots cleanly to `nommu#` in ~36 s wall time (3× faster than the v1.12.9 baseline of ~118 s with the older write-through D-cache enabled).
 
@@ -40,7 +40,7 @@ see_neorv32_run_linux/
 
 All source code is included. Build order matters — later steps depend on earlier outputs.
 
-**Submodule:** `neorv32/` is a git submodule pointing to `stnolting/neorv32` at a post-`v1.12.9` `origin/main` commit (`29739a83`). After cloning this repo, run `git submodule update --init --recursive` and then apply the patches in `neorv32_patches/` before building:
+**Submodule:** `neorv32/` is a git submodule pointing to `stnolting/neorv32` at a post-`v1.12.9` `origin/main` commit (`e0739e63`). After cloning this repo, run `git submodule update --init --recursive` and then apply the patches in `neorv32_patches/` before building:
 
 ```bash
 git submodule update --init --recursive
