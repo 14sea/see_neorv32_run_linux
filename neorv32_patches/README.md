@@ -45,13 +45,45 @@ line at the same index:
 `pnd_bp` becomes a sticky flag so the bypass survives the write-back
 detour, and is cleared on `S_BYPASS` ACK.
 
-**Status (2026-04-25):** functionally correct (no more "scheduling from
-idle" oops loop), BUT noticeably slow — every Linux atomic now triggers
-a full 16-word block write-back to SDRAM (~240 cycles) and an invalidate.
-Kernel boot is ~4× slower in kernel-time per milestone vs `v1.12.9`
-write-through. The fix is good enough to validate the architecture but
-will need a more targeted approach (cache-coherent AMO that goes
-through the cache instead of bypassing) before it's PR-ready.
+**Status (2026-04-26):** functionally correct *for early boot* (no more
+"scheduling from idle" oops loop, kernel reaches `start_kernel →
+do_initcalls → fs_initcall level 5`), but introduces a hard hang at
+`mutex_unlock(&clocksource_mutex)` inside `clocksource_done_booting()`
+(initcall #46 on a current build). Boot reliably reaches the marker
+sequence `ABCDE` (function entry, mutex_lock, finished_booting=1,
+__clocksource_watchdog_kthread, clocksource_select-with-Switched
+printk) and then never emits `F` (the marker right after mutex_unlock).
+
+**Verified NOT the cause** (each tested by reverting one workaround at
+a time on top of `kernel/neorv32_nommu.patch`):
+- single-shot `schedule()` / `schedule_preempt_disabled()` workaround
+- synchronous `synchronize_srcu()` rewrite (TINY_SRCU)
+- 120s `wait_event_timeout` in `async_synchronize_cookie_domain()`
+
+Bypassing the offending `mutex_unlock()` with a raw
+`atomic_long_set(&clocksource_mutex.owner, 0)` lets the function
+return, but each subsequent initcall then takes ~70–100 s of *kernel
+time* to print its END marker (4× wall slowdown on top of that).
+
+**Hypothesis:** the bypass-and-flush strategy makes every AMO/uncached
+request invalidate-then-bypass an entire 16-word line, and on hot
+locking paths (`mutex_unlock`'s `wake_up_q` → `try_to_wake_up`) the
+combined LR/SC + repeated cacheline write-back/invalidate creates a
+livelock-shaped hot loop that stalls for many minutes. The patch is
+therefore a *diagnostic stepping stone*, not a real fix.
+
+**Next step (planned for the next session):** rework as a
+cache-coherent AMO that runs *through* the cache (lookup → if hit,
+update line in place + write-through to bus; if miss, refill or
+promote bypass to a single read-modify-write that doesn't evict the
+whole line). Until then, do **not** try to bump the `neorv32`
+submodule with this patch in production — boot will hang at
+clocksource_done_booting.
+
+Detailed diagnostic walk (initcall trace, A-F markers in
+`clocksource_done_booting`, mutex slowpath markers, raw UART bypass
+via direct `0xFFF50000` writes) lives in the conversation log of the
+2026-04-25/26 session, not in-tree.
 
 ### `0001-cpu-fence-i-drain-dcache.patch`
 
