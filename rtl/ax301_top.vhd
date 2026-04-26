@@ -163,7 +163,9 @@ begin
     ICACHE_EN        => true,   -- I-cache needed for SDRAM execution (32-bit bus)
     CACHE_BLOCK_SIZE => 64,    -- 16 words per cache line (default)
     CACHE_BURSTS_EN  => false,  -- non-burst: sdram_ctrl does individual word reads
-    DCACHE_EN        => true
+    DCACHE_EN        => false  -- write-back D$ vs non-burst SDRAM is a net loss
+                                  -- and triggers ktime_get_coarse seqcount-retry
+                                  -- livelock; see neorv32_patches/README.md
   )
   port map (
     clk_i        => CLOCK,

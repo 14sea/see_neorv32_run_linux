@@ -6,6 +6,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 This project boots nommu Linux (kernel 6.6.83) on a NEORV32 RV32IMAC soft-core FPGA — the first known Linux boot on NEORV32. The NEORV32 has no MMU and no S-mode. Getting Linux running required 16 kernel patches across arch/riscv, scheduler, RCU, init, and drivers. We also found and fixed a [SC.W return value bug](https://github.com/stnolting/neorv32/pull/1520) in NEORV32's bus reservation station, enabling native atomic instructions in the kernel; the fix is now merged upstream and included in v1.12.9.
 
+The `neorv32` submodule is at the post-`v1.12.9` `origin/main` HEAD (currently `29739a83`) plus three local RTL patches in `neorv32_patches/` (`0001`, `0002`, `0004`). See `neorv32_patches/README.md` for the full inventory and rationale. The optional diagnostic counter patch (`0003`) is also included by default — it can be dropped without affecting boot.
+
+**D-cache is disabled** (`DCACHE_EN => false` in `rtl/ax301_top.vhd`). The new write-back D-cache architecture (PR #1513) requires burst-capable memory to be a net win; against the simple non-burst SDRAM controller in this project it is a net loss and triggers a `ktime_get_coarse_real_ts64` seqcount-retry livelock on hot kernel paths. With D-cache off the kernel boots cleanly to `nommu#` in ~36 s wall time (3× faster than the v1.12.9 baseline of ~118 s with the older write-through D-cache enabled).
+
 Target hardware: Heijin AX301 board with Altera Cyclone IV EP4CE6 FPGA, 32 MB SDRAM, 50 MHz.
 
 ## Hardware
@@ -20,7 +24,7 @@ Target hardware: Heijin AX301 board with Altera Cyclone IV EP4CE6 FPGA, 32 MB SD
 ```
 see_neorv32_run_linux/
 ├── tools/openFPGALoader/    — openFPGALoader source (build from source)
-├── neorv32/                 — NEORV32 RTL source (git submodule → stnolting/neorv32 v1.12.9)
+├── neorv32/                 — NEORV32 RTL source (git submodule → stnolting/neorv32, post-v1.12.9 origin/main)
 ├── linux-6.6.83.tar.xz     — Linux kernel tarball
 ├── rtl/                     — Custom RTL (ax301_top.vhd, sdram_ctrl.v, wb_sdram_ctrl.v)
 ├── quartus/                 — Quartus project (neorv32_demo.qsf/qpf/sdc)
@@ -36,7 +40,14 @@ see_neorv32_run_linux/
 
 All source code is included. Build order matters — later steps depend on earlier outputs.
 
-**Submodule:** `neorv32/` is a git submodule pointing to `stnolting/neorv32` (pinned at v1.12.9). After cloning this repo, run `git submodule update --init --recursive` before building.
+**Submodule:** `neorv32/` is a git submodule pointing to `stnolting/neorv32` at a post-`v1.12.9` `origin/main` commit (`29739a83`). After cloning this repo, run `git submodule update --init --recursive` and then apply the patches in `neorv32_patches/` before building:
+
+```bash
+git submodule update --init --recursive
+cd neorv32
+for p in ../neorv32_patches/*.patch; do git apply "$p"; done
+cd ..
+```
 
 ### Prerequisites
 
@@ -141,16 +152,16 @@ python3 host/boot_linux.py --port /dev/ttyUSB0
 
 ### Expected output
 
-After ~145s of xmodem transfer + ~98s of kernel boot = ~243s total:
+After ~145s of xmodem transfer + ~36s of kernel boot = ~181s total:
 ```
 ========================================
  NEORV32 nommu Linux — mini shell
 ========================================
 Linux (none) 6.6.83-... riscv32
-Uptime:    97 s
-Total RAM: 31004 KB
-Free RAM:  30264 KB
-Processes: 14
+Uptime:    31 s
+Total RAM: 31000 KB
+Free RAM:  30240 KB
+Processes: 15
 
 Type 'help' for commands.
 
@@ -285,7 +296,8 @@ python3 host/boot_sd.py --update         # ~17 s update + boot
 - `0xFFF40000` — CLINT (timer), `0xFFF50000` — UART0
 
 ### Key technical decisions
-- **Atomics use native RISC-V instructions** — NEORV32 has Zaamo + Zalrsc enabled. After fixing a [SC.W return value bug](https://github.com/stnolting/neorv32/pull/1520) in the RTL, the kernel uses upstream unmodified `cmpxchg.h`, `atomic.h` with native LR/SC and AMO instructions (810 atomic instructions in the kernel binary). Verified with 11 userspace LR/SC tests.
+- **Atomics use native RISC-V instructions** — NEORV32 has Zaamo + Zalrsc enabled. After fixing a [SC.W return value bug](https://github.com/stnolting/neorv32/pull/1520) in the RTL plus the LR/SC reservation policy in `neorv32_patches/0004-rvs-address-tracking.patch`, the kernel uses upstream unmodified `cmpxchg.h`, `atomic.h` with native LR/SC and AMO instructions (810 atomic instructions in the kernel binary). Verified with 11 userspace LR/SC tests.
+- **D-cache disabled** (`DCACHE_EN => false`) — see Project Overview at top. Re-enabling requires either burst-capable SDRAM or kernel patches to make hot reads (e.g., `ktime_get_coarse_real_ts64`) resilient to slow read windows.
 - **Scheduler modified to single-shot `__schedule()`** — prevents infinite `need_resched` loops caused by non-atomic `test_and_clear` racing with timer interrupts. Safe because single-core.
 - **`wfi` is upstream (not patched)** — testing confirmed that `wfi` works correctly; the timer interrupt wakes the CPU as expected.
 - **RISCV_ALTERNATIVE disabled** — runtime instruction patching conflicts with non-atomic replacements; causes illegal instruction trap after `free_initmem()`.
@@ -314,3 +326,5 @@ Prefix: `riscv-none-elf-` (xPack 14.2.0). The stage2 Makefile defaults to this o
 9. **CONFIG_RISCV_ISA_V, CONFIG_FPU, CONFIG_RISCV_ISA_FALLBACK must be disabled**: The defconfig explicitly disables them. NEORV32 has no FPU — `CONFIG_FPU=y` causes the kernel to hang after `free_initmem()` due to illegal instruction traps. Always verify with `grep -E 'RISCV_ISA_V|FPU|ISA_FALLBACK' .config` after `make defconfig`.
 10. **Kernel size must be close to 1,513,100 bytes**: If the Image is significantly larger (>1.55 MB), unwanted features got auto-enabled. Check the config items in pitfall #9.
 11. **Kernel compiler: xPack riscv-none-elf-gcc 14.2.0 only**: Buildroot's `riscv32-buildroot-linux-gnu-gcc` 12.4.0 compiles the kernel without errors, but the resulting Image hangs at `free_initmem()` on NEORV32 hardware. The hang is caused by a subtle code generation difference in GCC 12.4.0. Do NOT substitute compilers for the kernel build.
+12. **Don't enable D-cache without burst memory**: Setting `DCACHE_EN => true` in `rtl/ax301_top.vhd` against the current non-burst `wb_sdram_ctrl.v` is a net performance loss (every dirty eviction emits 16 single-word stores) AND triggers a `ktime_get_coarse_real_ts64` seqcount-retry livelock on hot kernel paths during fs_initcall. See `neorv32_patches/README.md` "Status" section for details. To enable D-cache, first add burst support to the SDRAM controller (or move to a burst-capable backend).
+13. **Apply RTL patches after submodule init**: After `git submodule update --init --recursive`, apply `neorv32_patches/*.patch` to the `neorv32/` working tree. Without these patches the bumped submodule will fail at SDRAM exec test (`0001`), corrupt atomics under interrupt load (`0004`), or break AMO coherence (`0002`).

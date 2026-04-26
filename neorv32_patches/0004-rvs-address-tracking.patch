@@ -1,0 +1,49 @@
+diff --git a/rtl/core/neorv32_bus.vhd b/rtl/core/neorv32_bus.vhd
+index 1f4f655d..33d7ac60 100644
+--- a/rtl/core/neorv32_bus.vhd
++++ b/rtl/core/neorv32_bus.vhd
+@@ -872,20 +872,41 @@ end neorv32_bus_amo_rvs;
+ architecture neorv32_bus_amo_rvs_rtl of neorv32_bus_amo_rvs is
+ 
+   signal valid, lr, sc, sc_fail, sc_pend : std_ulogic;
++  -- Reservation address tag (word granularity). Recorded on LR, used to
++  -- decide whether a subsequent store invalidates the reservation.
++  signal rvs_addr_tag : std_ulogic_vector(31 downto 2);
+ 
+ begin
+ 
+   -- Reservation Set Control ----------------------------------------------------------------
+   -- -------------------------------------------------------------------------------------------
++  -- Address-tracking reservation: only stores hitting the reserved word
++  -- clear `valid`. Reads (incl. cache fills) and stores to other addresses
++  -- leave it untouched. This matches the ARM-style semantics that the
++  -- RISC-V Linux kernel's __cmpxchg_release retry loop relies on; the
++  -- previous "any data access clears" policy made every IRQ trap-entry
++  -- stack push kill the reservation, livelocking kernel CAS retries.
++  -- The RISC-V Zalrsc spec explicitly allows this relaxation: SC.W is
++  -- *required* to fail only on conflicting accesses to the reserved set
++  -- and on context switches; spurious clears are permitted but not
++  -- mandatory.
+   rvs_control: process(rstn_i, clk_i)
+   begin
+     if (rstn_i = '0') then
+-      valid <= '0';
++      valid        <= '0';
++      rvs_addr_tag <= (others => '0');
+     elsif rising_edge(clk_i) then
+       if (core_req_i.fence = '1') then
+-        valid <= '0';
++        valid <= '0'; -- fence always invalidates the reservation set
+       elsif (core_req_i.stb = '1') and (core_req_i.meta(0) = '0') then -- data memory access?
+-        valid <= lr; -- set on load-reservate; clear for all other memory requests
++        if (lr = '1') then
++          valid        <= '1';
++          rvs_addr_tag <= core_req_i.addr(31 downto 2);
++        elsif (core_req_i.rw = '1') and (valid = '1') and
++              (core_req_i.addr(31 downto 2) = rvs_addr_tag) then
++          valid <= '0'; -- only stores to the reserved word invalidate
++        end if;
++        -- reads, and stores to other addresses, leave `valid` untouched
+       end if;
+     end if;
+   end process rvs_control;

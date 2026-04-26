@@ -293,10 +293,30 @@ static void cmd_help(void) {
     my_puts("  exit   - halt system\n");
 }
 
+/* Diagnostic: direct UART write from userspace, bypassing the kernel
+ * write() syscall path. On nommu Linux there's no MMU and no protection,
+ * so userspace can poke MMIO directly. Lets us see if /init started even
+ * if syscall path is wedged.
+ */
+static inline void __attribute__((always_inline)) diag_putc(char c)
+{
+    volatile unsigned int *uart = (volatile unsigned int *)0xFFF50000UL;
+    while (!(uart[0] & (1u << 19)))
+        ;
+    uart[1] = (unsigned int)(unsigned char)c;
+}
+
+static inline void diag_puts(const char *s)
+{
+    while (*s) diag_putc(*s++);
+}
+
 void _start(void) __attribute__((section(".text.init")));
 void _start(void) {
     char buf[128];
     int n;
+
+    diag_putc('!');  /* tiny direct-UART proof we started */
 
     my_puts("\n");
     my_puts("========================================\n");

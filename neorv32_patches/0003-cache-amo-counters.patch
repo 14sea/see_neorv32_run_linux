@@ -1,0 +1,154 @@
+diff --git a/rtl/core/neorv32_cache.vhd b/rtl/core/neorv32_cache.vhd
+--- a/rtl/core/neorv32_cache.vhd
++++ b/rtl/core/neorv32_cache.vhd
+@@ -123,6 +123,24 @@
+   signal dirty_rd : std_ulogic;
+   signal dirty_we : std_ulogic;
+ 
++  -- Diagnostic counter aperture (uncached, see 0003-cache-amo-counters.patch).
++  -- Reads return the indexed counter; any write resets all counters.
++  constant DBG_APERTURE_BASE : std_ulogic_vector(31 downto 5) := "111111111010101000000000000"; -- 0xFFAA0000
++  signal dbg_cnt_amo_total     : unsigned(31 downto 0);
++  signal dbg_cnt_amo_hit_dirty : unsigned(31 downto 0);
++  signal dbg_cnt_amo_hit_clean : unsigned(31 downto 0);
++  signal dbg_cnt_amo_miss      : unsigned(31 downto 0);
++  signal dbg_cnt_wb_total      : unsigned(31 downto 0);
++  signal dbg_cnt_wb_cycles     : unsigned(31 downto 0);
++  signal dbg_evt_amo_total     : std_ulogic;
++  signal dbg_evt_amo_hit_dirty : std_ulogic;
++  signal dbg_evt_amo_hit_clean : std_ulogic;
++  signal dbg_evt_amo_miss      : std_ulogic;
++  signal dbg_evt_wb_total      : std_ulogic;
++  signal dbg_in_writeback      : std_ulogic;
++  signal dbg_reset             : std_ulogic;
++  signal dbg_aperture_data     : std_ulogic_vector(31 downto 0);
++
+ begin
+ 
+   -- Control Engine Sync --------------------------------------------------------------------
+@@ -188,6 +206,14 @@
+     bus_req_o.addr <= ctrl.tag & ctrl.idx & ctrl.ofs_ext(offset_width_c-1 downto 0) & "00"; -- cache access
+     bus_req_o.ben  <= (others => '1'); -- cache updates use full-word accesses only
+ 
++    -- diagnostic event defaults --
++    dbg_evt_amo_total     <= '0';
++    dbg_evt_amo_hit_dirty <= '0';
++    dbg_evt_amo_hit_clean <= '0';
++    dbg_evt_amo_miss      <= '0';
++    dbg_evt_wb_total      <= '0';
++    dbg_reset             <= '0';
++
+     -- fsm --
+     case ctrl.state is
+ 
+@@ -217,7 +243,20 @@
+         ctrl_nxt.pnd_req <= '0'; -- access request accepted
+         ctrl_nxt.bp_req  <= '1'; -- in case we are doing a bypass request (set STB for one cycle)
+         --
+-        if (ctrl.pnd_bp = '1') then -- cache bypass (uncached or atomic memory operation)
++        -- Diagnostic aperture intercept: reads return the indexed counter
++        -- value, writes reset all counters. No bus traffic, single-cycle ACK.
++        -- Aperture lives in uncached space so pnd_bp is always '1' when hit.
++        if (ctrl.pnd_bp = '1') and (host_req_i.addr(31 downto 5) = DBG_APERTURE_BASE) then
++          ctrl_nxt.pnd_req <= '0';
++          if (host_req_i.rw = '0') then
++            host_rsp_o.data <= dbg_aperture_data;
++          else
++            dbg_reset <= '1';
++          end if;
++          host_rsp_o.ack  <= '1';
++          ctrl_nxt.pnd_bp <= '0';
++          ctrl_nxt.state  <= S_IDLE;
++        elsif (ctrl.pnd_bp = '1') then -- cache bypass (uncached or atomic memory operation)
+           -- Coherence with write-back D-cache: an AMO that bypasses the cache
+           -- must NOT see stale memory if the same line is dirty in this cache,
+           -- and must NOT leave a stale (clean) copy behind after the AMO writes
+@@ -227,12 +266,18 @@
+           --                               -> S_BYPASS, see S_WRITE_DONE handling)
+           --   * cache HIT, clean       -> just invalidate inline, then bypass
+           --   * cache MISS             -> direct bypass (no cache state to fix)
++          dbg_evt_amo_total <= '1';
+           if (cache_i.hit = '1') and (cache_i.drt = '1') and (READ_ONLY = false) then
++            dbg_evt_amo_hit_dirty <= '1';
++            dbg_evt_wb_total      <= '1';
+             ctrl_nxt.state <= S_WRITE_START; -- pnd_bp stays via the sticky default
+           else
+             if (cache_i.hit = '1') and (READ_ONLY = false) then
++              dbg_evt_amo_hit_clean <= '1';
+               cache_o.set <= '1'; -- invalidate the cached copy so post-AMO reads refill from memory
+               cache_o.vld <= '0';
++            else
++              dbg_evt_amo_miss <= '1';
+             end if;
+             ctrl_nxt.state <= S_BYPASS; -- pnd_bp will be cleared in S_BYPASS on ACK
+           end if;
+@@ -244,6 +289,7 @@
+           host_rsp_o.ack <= '1';
+           ctrl_nxt.state <= S_IDLE;
+         elsif (cache_i.drt = '1') and (READ_ONLY = false) then -- cache MISS: evicted block is dirty
++          dbg_evt_wb_total <= '1';
+           ctrl_nxt.state <= S_WRITE_START;
+         else -- cache MISS: evicted block is clean
+           ctrl_nxt.state <= S_READ_START;
+@@ -584,4 +630,61 @@
+   cache_i.hit <= '1' when (ctrl.hit = '1') or ((valid_rd = '1') and
+                           (cache_i.tag(tag_width_c-1 downto 0) = host_req_i.addr(31 downto 31-(tag_width_c-1)))) else '0';
+ 
++
++  -- Diagnostic Counter Aperture (read-only mux on host_req_i.addr(4:2)) -------------------
++  -- -------------------------------------------------------------------------------------------
++  dbg_aperture_mux: process(host_req_i, dbg_cnt_amo_total, dbg_cnt_amo_hit_dirty,
++                            dbg_cnt_amo_hit_clean, dbg_cnt_amo_miss,
++                            dbg_cnt_wb_total, dbg_cnt_wb_cycles)
++  begin
++    case host_req_i.addr(4 downto 2) is
++      when "000"  => dbg_aperture_data <= std_ulogic_vector(dbg_cnt_amo_total);
++      when "001"  => dbg_aperture_data <= std_ulogic_vector(dbg_cnt_amo_hit_dirty);
++      when "010"  => dbg_aperture_data <= std_ulogic_vector(dbg_cnt_amo_hit_clean);
++      when "011"  => dbg_aperture_data <= std_ulogic_vector(dbg_cnt_amo_miss);
++      when "100"  => dbg_aperture_data <= std_ulogic_vector(dbg_cnt_wb_total);
++      when "101"  => dbg_aperture_data <= std_ulogic_vector(dbg_cnt_wb_cycles);
++      when others => dbg_aperture_data <= (others => '0');
++    end case;
++  end process dbg_aperture_mux;
++
++  -- writeback-state cycle accumulator decode --
++  dbg_in_writeback <= '1' when (ctrl.state = S_WRITE_START) or
++                               (ctrl.state = S_WRITE_REQ)   or
++                               (ctrl.state = S_WRITE_RSP)   or
++                               (ctrl.state = S_WRITE_WAIT)  or
++                               (ctrl.state = S_WRITE_BURST) or
++                               (ctrl.state = S_WRITE_DONE)
++                          else '0';
++
++  -- Diagnostic counter increment process --
++  dbg_counter_sync: process(rstn_i, clk_i)
++  begin
++    if (rstn_i = '0') then
++      dbg_cnt_amo_total     <= (others => '0');
++      dbg_cnt_amo_hit_dirty <= (others => '0');
++      dbg_cnt_amo_hit_clean <= (others => '0');
++      dbg_cnt_amo_miss      <= (others => '0');
++      dbg_cnt_wb_total      <= (others => '0');
++      dbg_cnt_wb_cycles     <= (others => '0');
++    elsif rising_edge(clk_i) then
++      if (dbg_reset = '1') then
++        dbg_cnt_amo_total     <= (others => '0');
++        dbg_cnt_amo_hit_dirty <= (others => '0');
++        dbg_cnt_amo_hit_clean <= (others => '0');
++        dbg_cnt_amo_miss      <= (others => '0');
++        dbg_cnt_wb_total      <= (others => '0');
++        dbg_cnt_wb_cycles     <= (others => '0');
++      else
++        if (dbg_evt_amo_total     = '1') then dbg_cnt_amo_total     <= dbg_cnt_amo_total     + 1; end if;
++        if (dbg_evt_amo_hit_dirty = '1') then dbg_cnt_amo_hit_dirty <= dbg_cnt_amo_hit_dirty + 1; end if;
++        if (dbg_evt_amo_hit_clean = '1') then dbg_cnt_amo_hit_clean <= dbg_cnt_amo_hit_clean + 1; end if;
++        if (dbg_evt_amo_miss      = '1') then dbg_cnt_amo_miss      <= dbg_cnt_amo_miss      + 1; end if;
++        if (dbg_evt_wb_total      = '1') then dbg_cnt_wb_total      <= dbg_cnt_wb_total      + 1; end if;
++        if (dbg_in_writeback      = '1') then dbg_cnt_wb_cycles     <= dbg_cnt_wb_cycles     + 1; end if;
++      end if;
++    end if;
++  end process dbg_counter_sync;
++
++
+ end neorv32_cache_rtl;
