@@ -8,10 +8,16 @@ and remove the corresponding patch file.
 
 ## Status (2026-04-26)
 
-**Goal 1 reached.** Bumped `neorv32` submodule (detached at `29739a83`,
+**Goal 1 reached.** Bumped `neorv32` submodule (detached at `e0739e63`,
 post-`origin/main`) + patches `0001`, `0002`, `0004` boot Linux to
 `nommu#` shell with `DCACHE_EN => false`, in ~36 s wall time (3× faster
 than the pre-bump v1.12.9 baseline of ~118 s).
+
+**Upstream PR:** `0001` and `0002` (the two D-cache correctness fixes)
+are submitted upstream as
+[stnolting/neorv32#1540](https://github.com/stnolting/neorv32/pull/1540).
+If/when merged, drop the corresponding patch files from this directory
+and the patch-apply step from the build flow.
 
 **Why D-cache is off:** the new write-back D-cache architecture (PR
 [#1513](https://github.com/stnolting/neorv32/pull/1513), 2026-04) is a
