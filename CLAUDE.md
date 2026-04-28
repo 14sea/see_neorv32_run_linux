@@ -83,7 +83,7 @@ export PATH=$PATH:$HOME/intelFPGA_lite/21.1/quartus/bin
 
 cd quartus
 quartus_sh --flow compile neorv32_demo
-quartus_cpf -c -o bitstream_compression=off output_files/neorv32_demo.sof ../output/neorv32_demo.rbf
+quartus_cpf -c -o bitstream_compression=off neorv32_demo.sof ../output/neorv32_demo.rbf
 ```
 
 ### Step 3: Build stage2 loader
