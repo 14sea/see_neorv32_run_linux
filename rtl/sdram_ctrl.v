@@ -40,14 +40,14 @@ module sdram_ctrl (
     assign sdram_cke = 1'b1;
 
     // Timing parameters (50 MHz = 20 ns period, conservative)
-    localparam INIT_CYCLES = 14'd5000;  // 100 µs
+    localparam INIT_CYCLES = 14'd10000;  // 200 µs (HY57V2562GTR datasheet requires 200 µs after stable Vdd+clock)
     localparam TRP   = 3'd1;  // Precharge to ready (20 ns = 1 cycle)
     localparam TRC   = 3'd4;  // Refresh cycle (63 ns ≈ 4 cycles)
     localparam TRCD  = 3'd1;  // ACT to READ/WRITE (20 ns = 1 cycle)
     localparam CL    = 3'd3;  // CAS latency
     localparam TWR   = 3'd2;  // Write recovery
     localparam TMRD  = 3'd2;  // Mode register set delay
-    localparam REF_INTERVAL = 10'd380;  // Refresh every 7.8 µs (390 cycles, with margin)
+    localparam REF_INTERVAL = 10'd380;  // Refresh every 7.6 µs (spec ≤7.81 µs, with margin)
 
     // SDRAM commands: {CS_N, RAS_N, CAS_N, WE_N}
     localparam CMD_NOP      = 4'b0111;
@@ -90,7 +90,8 @@ module sdram_ctrl (
     localparam S_DONE_W     = 5'd27;  // 1-cycle gap: let wb_sdram_ctrl clear pending before S_IDLE
 
     reg [4:0]  state;
-    reg [13:0] cnt;
+    reg [13:0] init_cnt;      // 14-bit, only used in S_INIT_WAIT (counts to 10000)
+    reg [2:0]  cnt;           // 3-bit, used by all other wait states (max value = TWR+TRP = 3)
     reg [9:0]  ref_cnt;       // refresh interval counter
     reg        ref_req;       // refresh requested
     reg        initialized;
@@ -142,7 +143,8 @@ module sdram_ctrl (
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
             state       <= S_INIT_WAIT;
-            cnt         <= 14'd0;
+            init_cnt    <= 14'd0;
+            cnt         <= 3'd0;
             initialized <= 1'b0;
             ready       <= 1'b0;
             rdata       <= 32'd0;
@@ -169,58 +171,58 @@ module sdram_ctrl (
             S_INIT_WAIT: begin
                 cmd(CMD_INHIBIT);
                 dq_oe <= 1'b0;
-                if (cnt >= INIT_CYCLES) begin
-                    cnt   <= 14'd0;
+                if (init_cnt >= INIT_CYCLES) begin
+                    cnt   <= 3'd0;
                     state <= S_INIT_PRE;
                 end else begin
-                    cnt <= cnt + 14'd1;
+                    init_cnt <= init_cnt + 14'd1;
                 end
             end
 
             S_INIT_PRE: begin
                 cmd(CMD_PRECHARGE);
                 sdram_addr[10] <= 1'b1;  // precharge all banks
-                cnt   <= 14'd0;
+                cnt   <= 3'd0;
                 state <= S_INIT_PRE_W;
             end
 
             S_INIT_PRE_W: begin
                 cmd(CMD_NOP);
                 if (cnt >= TRP) begin
-                    cnt   <= 14'd0;
+                    cnt   <= 3'd0;
                     state <= S_INIT_AR1;
                 end else
-                    cnt <= cnt + 14'd1;
+                    cnt <= cnt + 3'd1;
             end
 
             S_INIT_AR1: begin
                 cmd(CMD_REFRESH);
-                cnt   <= 14'd0;
+                cnt   <= 3'd0;
                 state <= S_INIT_AR1_W;
             end
 
             S_INIT_AR1_W: begin
                 cmd(CMD_NOP);
                 if (cnt >= TRC) begin
-                    cnt   <= 14'd0;
+                    cnt   <= 3'd0;
                     state <= S_INIT_AR2;
                 end else
-                    cnt <= cnt + 14'd1;
+                    cnt <= cnt + 3'd1;
             end
 
             S_INIT_AR2: begin
                 cmd(CMD_REFRESH);
-                cnt   <= 14'd0;
+                cnt   <= 3'd0;
                 state <= S_INIT_AR2_W;
             end
 
             S_INIT_AR2_W: begin
                 cmd(CMD_NOP);
                 if (cnt >= TRC) begin
-                    cnt   <= 14'd0;
+                    cnt   <= 3'd0;
                     state <= S_INIT_LMR;
                 end else
-                    cnt <= cnt + 14'd1;
+                    cnt <= cnt + 3'd1;
             end
 
             S_INIT_LMR: begin
@@ -228,7 +230,7 @@ module sdram_ctrl (
                 sdram_ba   <= 2'b00;
                 // Mode: BL=1, Sequential, CL=3, single write
                 sdram_addr <= {3'b000, 1'b0, 2'b00, 3'b011, 1'b0, 3'b000};
-                cnt   <= 14'd0;
+                cnt   <= 3'd0;
                 state <= S_INIT_LMR_W;
             end
 
@@ -238,7 +240,7 @@ module sdram_ctrl (
                     initialized <= 1'b1;
                     state <= S_IDLE;
                 end else
-                    cnt <= cnt + 14'd1;
+                    cnt <= cnt + 3'd1;
             end
 
             // ========== IDLE ==========
@@ -260,22 +262,22 @@ module sdram_ctrl (
             S_REF_PRE: begin
                 cmd(CMD_PRECHARGE);
                 sdram_addr[10] <= 1'b1;
-                cnt   <= 14'd0;
+                cnt   <= 3'd0;
                 state <= S_REF_PRE_W;
             end
 
             S_REF_PRE_W: begin
                 cmd(CMD_NOP);
                 if (cnt >= TRP) begin
-                    cnt   <= 14'd0;
+                    cnt   <= 3'd0;
                     state <= S_REF_AR;
                 end else
-                    cnt <= cnt + 14'd1;
+                    cnt <= cnt + 3'd1;
             end
 
             S_REF_AR: begin
                 cmd(CMD_REFRESH);
-                cnt   <= 14'd0;
+                cnt   <= 3'd0;
                 state <= S_REF_AR_W;
             end
 
@@ -284,7 +286,7 @@ module sdram_ctrl (
                 if (cnt >= TRC) begin
                     state <= S_IDLE;
                 end else
-                    cnt <= cnt + 14'd1;
+                    cnt <= cnt + 3'd1;
             end
 
             // ========== ACTIVATE ==========
@@ -292,17 +294,17 @@ module sdram_ctrl (
                 cmd(CMD_ACT);
                 sdram_ba   <= lat_ba;
                 sdram_addr <= lat_row;
-                cnt   <= 14'd0;
+                cnt   <= 3'd0;
                 state <= S_ACT_W;
             end
 
             S_ACT_W: begin
                 cmd(CMD_NOP);
                 if (cnt >= TRCD) begin
-                    cnt <= 14'd0;
+                    cnt <= 3'd0;
                     state <= is_write ? S_WR_CMD0 : S_RD_CMD0;
                 end else
-                    cnt <= cnt + 14'd1;
+                    cnt <= cnt + 3'd1;
             end
 
             // ========== READ (two 16-bit reads) ==========
@@ -311,7 +313,7 @@ module sdram_ctrl (
                 sdram_ba      <= lat_ba;
                 sdram_addr    <= {4'b0000, lat_col_lo};  // A10=0, keep row open
                 sdram_dqm     <= 2'b00;
-                cnt   <= 14'd0;
+                cnt   <= 3'd0;
                 state <= S_RD_CL0;
             end
 
@@ -320,7 +322,7 @@ module sdram_ctrl (
                 if (cnt >= CL - 1) begin  // CL=3: wait 2 cycles (inverted clock: data valid after falling edge)
                     state <= S_RD_CAP0;
                 end else
-                    cnt <= cnt + 14'd1;
+                    cnt <= cnt + 3'd1;
             end
 
             S_RD_CAP0: begin
@@ -334,7 +336,7 @@ module sdram_ctrl (
                 sdram_ba      <= lat_ba;
                 sdram_addr    <= {4'b0010, lat_col_hi};  // A10=1, auto-precharge
                 sdram_dqm     <= 2'b00;
-                cnt   <= 14'd0;
+                cnt   <= 3'd0;
                 state <= S_RD_CL1;
             end
 
@@ -343,13 +345,13 @@ module sdram_ctrl (
                 if (cnt >= CL - 1) begin
                     state <= S_RD_CAP1;
                 end else
-                    cnt <= cnt + 14'd1;
+                    cnt <= cnt + 3'd1;
             end
 
             S_RD_CAP1: begin
                 rdata <= {sdram_dq, data_lo};  // {high, low}
                 cmd(CMD_NOP);
-                cnt   <= 14'd0;
+                cnt   <= 3'd0;
                 state <= S_RD_PRE_W;
             end
 
@@ -358,7 +360,7 @@ module sdram_ctrl (
                 if (cnt >= TRP) begin
                     state <= S_DONE;
                 end else
-                    cnt <= cnt + 14'd1;
+                    cnt <= cnt + 3'd1;
             end
 
             // ========== WRITE (two 16-bit writes) ==========
@@ -378,7 +380,7 @@ module sdram_ctrl (
                 sdram_addr    <= {4'b0010, lat_col_hi};  // A10=1, auto-precharge
                 sdram_dqm     <= {~wstrb_lat[3], ~wstrb_lat[2]};
                 dq_out <= wdata_lat[31:16];
-                cnt    <= 14'd0;
+                cnt    <= 3'd0;
                 state  <= S_WR_REC;
             end
 
@@ -388,7 +390,7 @@ module sdram_ctrl (
                 if (cnt >= TWR + TRP) begin
                     state <= S_DONE;
                 end else
-                    cnt <= cnt + 14'd1;
+                    cnt <= cnt + 3'd1;
             end
 
             // ========== DONE ==========
