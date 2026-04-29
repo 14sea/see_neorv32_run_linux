@@ -13,7 +13,8 @@ v1.13.0.1).
 
 **Active local patch:** only `0004-rvs-address-tracking.patch`. With
 this patch applied + `DCACHE_EN => false` in `rtl/ax301_top.vhd`, the
-kernel boots to `nommu#` shell in ~36 s wall time.
+kernel boots to `nommu#` shell in ~20 s wall time (after the SDRAM
+controller optims in `rtl/sdram_ctrl.v`; was ~36 s before those).
 
 **Recently dropped (now upstream):**
 
