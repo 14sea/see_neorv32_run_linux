@@ -77,17 +77,18 @@ module sdram_ctrl (
     localparam S_ACT        = 5'd14;
     localparam S_ACT_W      = 5'd15;
     localparam S_RD_CMD0    = 5'd16;
-    localparam S_RD_CL0     = 5'd17;
-    localparam S_RD_CAP0    = 5'd18;
-    localparam S_RD_CMD1    = 5'd19;
-    localparam S_RD_CL1     = 5'd20;
-    localparam S_RD_CAP1    = 5'd21;
-    localparam S_RD_PRE_W   = 5'd22;
-    localparam S_WR_CMD0    = 5'd23;
-    localparam S_WR_CMD1    = 5'd24;
-    localparam S_WR_REC     = 5'd25;
-    localparam S_DONE       = 5'd26;
-    localparam S_DONE_W     = 5'd27;  // 1-cycle gap: let wb_sdram_ctrl clear pending before S_IDLE
+    localparam S_RD_NOP1    = 5'd17;  // 1-NOP gap between two READ commands
+    localparam S_RD_CMD1    = 5'd18;
+    localparam S_RD_WAIT    = 5'd19;
+    localparam S_RD_CAP0    = 5'd20;
+    localparam S_RD_GAP     = 5'd21;  // 1-cycle gap to let DQ transition between bursts
+    localparam S_RD_CAP1    = 5'd22;
+    localparam S_RD_PRE_W   = 5'd23;
+    localparam S_WR_CMD0    = 5'd24;
+    localparam S_WR_CMD1    = 5'd25;
+    localparam S_WR_REC     = 5'd26;
+    localparam S_DONE       = 5'd27;
+    localparam S_DONE_W     = 5'd28;  // 1-cycle gap: let wb_sdram_ctrl clear pending before S_IDLE
 
     reg [4:0]  state;
     reg [13:0] init_cnt;      // 14-bit, only used in S_INIT_WAIT (counts to 10000)
@@ -307,26 +308,25 @@ module sdram_ctrl (
                     cnt <= cnt + 3'd1;
             end
 
-            // ========== READ (two 16-bit reads) ==========
+            // ========== READ (pipelined BL=1, 1 NOP between READ commands) ==========
+            // Timing (CL=3, inverted SDRAM clock):
+            //   T=0  S_RD_CMD0  → CMD_READ col_lo registered at T=1
+            //   T=1  S_RD_NOP1  → SDRAM samples READ col_lo at T=1.5; cmd will go NOP at T=2
+            //   T=2  S_RD_CMD1  → SDRAM samples NOP at T=2.5
+            //   T=3  S_RD_WAIT  → SDRAM samples READ col_hi at T=3.5
+            //   T=4  S_RD_CAP0  → SDRAM samples NOP at T=4.5; col_lo data on DQ T=4.5..5.5
+            //   T=5  S_RD_GAP   → schedule data_lo<=DQ at T=5 captures col_lo ✓
+            //   T=6  S_RD_CAP1  → col_hi data on DQ T=6.5..7.5
+            //   T=7  S_RD_PRE_W → schedule rdata<={DQ,data_lo} at T=7 captures col_hi ✓
             S_RD_CMD0: begin
                 cmd(CMD_READ);
                 sdram_ba      <= lat_ba;
                 sdram_addr    <= {4'b0000, lat_col_lo};  // A10=0, keep row open
                 sdram_dqm     <= 2'b00;
-                cnt   <= 3'd0;
-                state <= S_RD_CL0;
+                state <= S_RD_NOP1;
             end
 
-            S_RD_CL0: begin
-                cmd(CMD_NOP);
-                if (cnt >= CL - 1) begin  // CL=3: wait 2 cycles (inverted clock: data valid after falling edge)
-                    state <= S_RD_CAP0;
-                end else
-                    cnt <= cnt + 3'd1;
-            end
-
-            S_RD_CAP0: begin
-                data_lo <= sdram_dq;  // capture low 16 bits
+            S_RD_NOP1: begin
                 cmd(CMD_NOP);
                 state <= S_RD_CMD1;
             end
@@ -336,16 +336,23 @@ module sdram_ctrl (
                 sdram_ba      <= lat_ba;
                 sdram_addr    <= {4'b0010, lat_col_hi};  // A10=1, auto-precharge
                 sdram_dqm     <= 2'b00;
-                cnt   <= 3'd0;
-                state <= S_RD_CL1;
+                state <= S_RD_WAIT;
             end
 
-            S_RD_CL1: begin
+            S_RD_WAIT: begin
                 cmd(CMD_NOP);
-                if (cnt >= CL - 1) begin
-                    state <= S_RD_CAP1;
-                end else
-                    cnt <= cnt + 3'd1;
+                state <= S_RD_CAP0;
+            end
+
+            S_RD_CAP0: begin
+                data_lo <= sdram_dq;  // capture col_lo data at next rising edge
+                cmd(CMD_NOP);
+                state <= S_RD_GAP;
+            end
+
+            S_RD_GAP: begin
+                cmd(CMD_NOP);
+                state <= S_RD_CAP1;
             end
 
             S_RD_CAP1: begin
