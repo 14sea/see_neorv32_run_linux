@@ -8,7 +8,7 @@ This project boots nommu Linux (kernel 6.6.83) on a NEORV32 RV32IMAC soft-core F
 
 The `neorv32` submodule is at post-`#1540` merge HEAD on `origin/main` (currently `9b1acf7e`, v1.13.0.1) plus one local RTL patch in `neorv32_patches/` (`0004-rvs-address-tracking.patch`). The two D-cache correctness fixes (formerly `0001` + `0002`) are now upstream as part of [PR #1540](https://github.com/stnolting/neorv32/pull/1540). See `neorv32_patches/README.md` for the full inventory and rationale.
 
-**D-cache is disabled** (`DCACHE_EN => false` in `rtl/ax301_top.vhd`). The new write-back D-cache architecture (PR #1513) requires burst-capable memory to be a net win; against the simple non-burst SDRAM controller in this project it is a net loss and triggers a `ktime_get_coarse_real_ts64` seqcount-retry livelock on hot kernel paths. With D-cache off the kernel boots cleanly to `nommu#` in ~36 s wall time (3× faster than the v1.12.9 baseline of ~118 s with the older write-through D-cache enabled).
+**D-cache is disabled** (`DCACHE_EN => false` in `rtl/ax301_top.vhd`). The new write-back D-cache architecture (PR #1513) requires burst-capable memory to be a net win; against the simple non-burst SDRAM controller in this project it is a net loss and triggers a `ktime_get_coarse_real_ts64` seqcount-retry livelock on hot kernel paths. With D-cache off the kernel boots cleanly to `nommu#` in ~20 s wall time (6× faster than the v1.12.9 baseline of ~118 s) thanks to a 3-phase SDRAM controller rewrite (200 µs init spec fix, pipelined back-to-back READ with 1-NOP gap, and open-row tracking that skips ACT for same-row hits).
 
 Target hardware: Heijin AX301 board with Altera Cyclone IV EP4CE6 FPGA, 32 MB SDRAM, 50 MHz.
 
@@ -33,6 +33,7 @@ see_neorv32_run_linux/
 ├── sw/stage2_loader/        — Stage2 xmodem loader (C, must fit 8 KB)
 ├── sw/initramfs/            — Minimal init (C, builds neo_initramfs.cpio.gz)
 ├── host/                    — boot_linux.py, test_shell.py
+├── sim/                     — iverilog testbench for sdram_ctrl (`make` to run)
 └── output/                  — Build outputs go here (initially empty)
 ```
 
@@ -152,7 +153,7 @@ python3 host/boot_linux.py --port /dev/ttyUSB0
 
 ### Expected output
 
-After ~145s of xmodem transfer + ~36s of kernel boot = ~181s total:
+After ~145s of xmodem transfer + ~20s of kernel boot = ~165s total:
 ```
 ========================================
  NEORV32 nommu Linux — mini shell
@@ -287,7 +288,7 @@ python3 host/boot_sd.py --update         # ~17 s update + boot
 1. **NEORV32 bootloader** (ROM at 0xFFE00000, 19200 baud) — uploads stage2_loader.bin
 2. **Stage2 loader** (IMEM, 115200 baud) — receives 'l' for Linux mode, then xmodem-transfers kernel+DTB+initramfs to SDRAM with CRC-32 verification
 3. **Kernel jump** — stage2 jumps to 0x40000000 with a0=hartid, a1=DTB pointer
-4. **Linux console** — ~118s boot to mini shell (custom /init, not busybox)
+4. **Linux console** — ~20s boot to mini shell (custom /init, not busybox)
 
 ### Memory map
 - `0x00000000` — 8 KB IMEM (stage2 loader, M9K BRAM)
