@@ -89,6 +89,8 @@ module sdram_ctrl (
     localparam S_WR_REC     = 5'd26;
     localparam S_DONE       = 5'd27;
     localparam S_DONE_W     = 5'd28;  // 1-cycle gap: let wb_sdram_ctrl clear pending before S_IDLE
+    localparam S_PRE_OLD    = 5'd29;  // close previously opened row before opening new
+    localparam S_PRE_OLD_W  = 5'd30;  // wait TRP after PRECHARGE
 
     reg [4:0]  state;
     reg [13:0] init_cnt;      // 14-bit, only used in S_INIT_WAIT (counts to 10000)
@@ -101,6 +103,11 @@ module sdram_ctrl (
     reg [24:0] addr_lat;      // latched address
     reg [31:0] wdata_lat;     // latched write data
     reg [ 3:0] wstrb_lat;    // latched write strobe
+
+    // Open-row tracking (page-mode): skip ACT when next access hits same bank+row
+    reg        row_open;
+    reg [1:0]  open_ba;
+    reg [12:0] open_row;
 
     // DQ tristate
     reg        dq_oe;
@@ -163,6 +170,9 @@ module sdram_ctrl (
             sdram_ba    <= 2'b00;
             sdram_addr  <= 13'd0;
             sdram_dqm   <= 2'b00;
+            row_open    <= 1'b0;
+            open_ba     <= 2'b00;
+            open_row    <= 13'd0;
         end else begin
             ready <= 1'b0;  // default: deassert ready
 
@@ -255,7 +265,14 @@ module sdram_ctrl (
                     wdata_lat <= wdata;
                     wstrb_lat <= wstrb;
                     is_write  <= (wstrb != 4'b0000);
-                    state     <= S_ACT;
+                    // Open-row dispatch: skip ACT for same bank+row hit
+                    if (row_open && (addr[24:23] == open_ba) && (addr[22:10] == open_row)) begin
+                        state <= (wstrb != 4'b0000) ? S_WR_CMD0 : S_RD_CMD0;
+                    end else if (row_open) begin
+                        state <= S_PRE_OLD;
+                    end else begin
+                        state <= S_ACT;
+                    end
                 end
             end
 
@@ -264,6 +281,7 @@ module sdram_ctrl (
                 cmd(CMD_PRECHARGE);
                 sdram_addr[10] <= 1'b1;
                 cnt   <= 3'd0;
+                row_open <= 1'b0;  // PRECHARGE-ALL closes any open row
                 state <= S_REF_PRE_W;
             end
 
@@ -302,8 +320,11 @@ module sdram_ctrl (
             S_ACT_W: begin
                 cmd(CMD_NOP);
                 if (cnt >= TRCD) begin
-                    cnt <= 3'd0;
-                    state <= is_write ? S_WR_CMD0 : S_RD_CMD0;
+                    cnt      <= 3'd0;
+                    row_open <= 1'b1;
+                    open_ba  <= lat_ba;
+                    open_row <= lat_row;
+                    state    <= is_write ? S_WR_CMD0 : S_RD_CMD0;
                 end else
                     cnt <= cnt + 3'd1;
             end
@@ -334,7 +355,7 @@ module sdram_ctrl (
             S_RD_CMD1: begin
                 cmd(CMD_READ);
                 sdram_ba      <= lat_ba;
-                sdram_addr    <= {4'b0010, lat_col_hi};  // A10=1, auto-precharge
+                sdram_addr    <= {4'b0000, lat_col_hi};  // A10=0, keep row open
                 sdram_dqm     <= 2'b00;
                 state <= S_RD_WAIT;
             end
@@ -384,7 +405,7 @@ module sdram_ctrl (
             S_WR_CMD1: begin
                 cmd(CMD_WRITE);
                 sdram_ba      <= lat_ba;
-                sdram_addr    <= {4'b0010, lat_col_hi};  // A10=1, auto-precharge
+                sdram_addr    <= {4'b0000, lat_col_hi};  // A10=0, keep row open
                 sdram_dqm     <= {~wstrb_lat[3], ~wstrb_lat[2]};
                 dq_out <= wdata_lat[31:16];
                 cnt    <= 3'd0;
@@ -412,6 +433,25 @@ module sdram_ctrl (
                 // 1-cycle gap: wb_sdram_ctrl clears pending during S_DONE,
                 // so by now sel=pending=0 and S_IDLE won't start a spurious read.
                 state <= S_IDLE;
+            end
+
+            // ========== Close previously opened row (cross-row miss) ==========
+            S_PRE_OLD: begin
+                cmd(CMD_PRECHARGE);
+                sdram_ba       <= open_ba;
+                sdram_addr[10] <= 1'b0;  // precharge specific bank only
+                cnt      <= 3'd0;
+                row_open <= 1'b0;
+                state    <= S_PRE_OLD_W;
+            end
+
+            S_PRE_OLD_W: begin
+                cmd(CMD_NOP);
+                if (cnt >= TRP) begin
+                    cnt   <= 3'd0;
+                    state <= S_ACT;
+                end else
+                    cnt <= cnt + 3'd1;
             end
 
             default: state <= S_IDLE;
