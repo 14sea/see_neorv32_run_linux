@@ -1,5 +1,13 @@
 # PR: Two write-back D-cache correctness fixes
 
+> **MERGED 2026-04-29** as squash commit
+> [`9b1acf7e`](https://github.com/stnolting/neorv32/commit/9b1acf7e)
+> on `origin/main` (v1.13.0.1) via
+> [stnolting/neorv32#1540](https://github.com/stnolting/neorv32/pull/1540).
+> Maintainer rewrote both fixes on top of ours — semantically equivalent,
+> code-organization cleaner. This file is preserved as the original PR
+> description for historical context.
+
 Two coherence bugs in the cache architecture introduced by #1513
 (write-back & write-allocate). Found while bumping the `neorv32`
 submodule in [see_neorv32_run_linux](https://github.com/14sea/see_neorv32_run_linux)

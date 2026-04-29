@@ -6,18 +6,31 @@ because they have not yet been merged upstream.
 When/if these are accepted upstream, bump the `neorv32` submodule pointer
 and remove the corresponding patch file.
 
-## Status (2026-04-26)
+## Status (2026-04-29)
 
-**Goal 1 reached.** Bumped `neorv32` submodule (detached at `e0739e63`,
-post-`origin/main`) + patches `0001`, `0002`, `0004` boot Linux to
-`nommu#` shell with `DCACHE_EN => false`, in ~36 s wall time (3× faster
-than the pre-bump v1.12.9 baseline of ~118 s).
+**Submodule pin:** `9b1acf7e` (post-`#1540` merge on `origin/main`,
+v1.13.0.1).
 
-**Upstream PR:** `0001` and `0002` (the two D-cache correctness fixes)
-are submitted upstream as
-[stnolting/neorv32#1540](https://github.com/stnolting/neorv32/pull/1540).
-If/when merged, drop the corresponding patch files from this directory
-and the patch-apply step from the build flow.
+**Active local patch:** only `0004-rvs-address-tracking.patch`. With
+this patch applied + `DCACHE_EN => false` in `rtl/ax301_top.vhd`, the
+kernel boots to `nommu#` shell in ~36 s wall time.
+
+**Recently dropped (now upstream):**
+
+- `0001-cpu-fence-i-drain-dcache.patch` — merged via
+  [stnolting/neorv32#1540](https://github.com/stnolting/neorv32/pull/1540)
+  (squash commit `9b1acf7e`, 2026-04-29). The maintainer kept the
+  semantic fix (always assert `lsu_fence` in `opcode_fence_c` decode),
+  comment shortened to one-liner with `#1540` link.
+- `0002-cache-amo-flush.patch` — merged via the same PR. Maintainer
+  factored the bypass-vs-cache-line decision into `S_CHECK` and
+  reorganized the `pnd_bp` clear path; functionally equivalent to
+  ours on AX301.
+- `0003-cache-amo-counters.patch` — diagnostic counters at
+  `0xFFAA0000`. Removed because the upstream cache.vhd refactor moved
+  the FSM hook points the patch needed; the diagnostic served its
+  purpose (helped pinpoint the seqcount-livelock root cause) and is
+  recoverable from git history if a future investigation needs it.
 
 **Why D-cache is off:** the new write-back D-cache architecture (PR
 [#1513](https://github.com/stnolting/neorv32/pull/1513), 2026-04) is a
@@ -35,26 +48,11 @@ we'd need to either (a) extend `wb_sdram_ctrl.v` to support burst
 transfers, or (b) move to a memory backend that natively supports
 bursts.
 
-The three RTL patches below are still **needed** at the bumped
-submodule pointer because the failure modes they fix are CPU/bus
-issues independent of D-cache: `0001` fixes a `fence.i` semantics
-bug, `0002` fixes AMO/uncached coherence, and `0004` fixes the LR/SC
-reservation policy. With D-cache off, `0001` and `0002` are no-ops
-in practice (no dirty lines means no drain or flush is ever needed),
-but they're correctness fixes that should be upstreamed regardless.
 `0004` matters even with D-cache off, because IRQ trap-entry stack
 pushes still go through the bus and would still clear the
-reservation under the strict policy.
+reservation under the upstream strict policy.
 
 ## Apply
-
-The submodule is pinned at `e0739e63` (post-`v1.12.9` `origin/main` HEAD).
-At this pointer the patches below are **required** for the kernel boot:
-without them the bumped submodule fails at SDRAM exec test (`0001`),
-breaks AMO coherence (`0002`), or livelocks the kernel CAS retry under
-IRQ load (`0004`). `0003` is diagnostic-only and optional.
-
-Apply in order (0003 depends on 0002):
 
 ```bash
 cd neorv32
@@ -64,107 +62,6 @@ done
 ```
 
 ## Inventory
-
-### `0001-cpu-fence-i-drain-dcache.patch`
-
-**Targets:** `rtl/core/neorv32_cpu_control.vhd`, opcode_fence_c decode.
-
-**Bug:** Since commit `f774dac6 [cache] first draft of write-back
-architecture`, the cache implements write-back. The CPU's `fence.i`
-decoder asserts only `if_fence` (I-cache invalidate) but not
-`lsu_fence` (D-cache drain). This violates the RISC-V `Zifencei`
-guarantee that *stores to instruction memory are made visible to
-subsequent instruction fetches* — with a write-back D-cache, the
-dirty stores never reach memory before the I-cache refills, so the
-I-cache reads stale memory and the CPU executes garbage.
-
-In `v1.12.9` the cache was write-through, so the missing D-cache
-drain happened to be harmless. Once write-back landed, this latent
-bug became fatal for any code that writes to memory and then jumps
-to the same memory (boot loaders, JIT, kernel module loading, …).
-
-**Bisect:** `git bisect` between `v1.12.9` (good) and `origin/main`
-(bad) on `see_neorv32_run_linux`'s xmodem boot identifies
-`f774dac6` as the first bad commit.
-
-**Fix:** make `fence.i` also drain the D-cache. One-line change in
-the decoder (always assert `lsu_fence` for `opcode_fence_c`;
-`if_fence` remains gated on `funct3 LSB` so plain `fence` still
-doesn't bother the I-cache).
-
-**Status:** verified on hardware. Independently correct, should be
-upstreamed regardless of which D-cache write policy is in effect.
-With our production `DCACHE_EN => false` it is a no-op (no D-cache
-to drain), but with D-cache on it is required for correctness.
-
-### `0002-cache-amo-flush.patch`
-
-**Targets:** `rtl/core/neorv32_cache.vhd`, `S_CHECK` / `S_BYPASS` /
-`S_WRITE_DONE`.
-
-**Bug:** AMO requests bypass the cache (jump straight to the bus),
-but with a write-back D-cache that breaks coherence: a regular store
-can leave dirty data in the cache while the AMO reads stale memory,
-and after the AMO writes memory the cache still holds the pre-AMO
-value, so a later plain load returns the stale cached copy.
-
-**Fix:** before bypassing for an AMO/uncached request, look at the
-cache line at the same index:
-- HIT, dirty → write the line back to memory first, invalidate, then
-  bypass (so the AMO sees the latest memory and no stale copy is left).
-- HIT, clean → invalidate inline, then bypass (memory is already current,
-  but the cached copy would go stale once the AMO writes memory).
-- MISS → bypass directly (no cache state to repair).
-
-`pnd_bp` becomes a sticky flag so the bypass survives the write-back
-detour, and is cleared on `S_BYPASS` ACK.
-
-**Status:** verified on hardware. Like `0001`, this is independently
-correct and should be upstreamed. With our production
-`DCACHE_EN => false` it is a no-op (`pnd_bp` is always a clean miss);
-with D-cache on it is required for correctness.
-
-### `0003-cache-amo-counters.patch` (diagnostic, optional)
-
-**Targets:** `rtl/core/neorv32_cache.vhd`.
-
-**Purpose:** Six 32-bit performance counters + a memory-mapped read
-aperture at `0xFFAA0000` to quantify the AMO/uncached coherence-flush
-hot path that `0002` introduces. Diagnostic-only; this patch does not
-change boot behaviour by itself.
-
-**Counters** (incremented in cache `S_CHECK` / writeback FSM):
-
-| Slot (offset) | Name              | Trigger                                                                  |
-| ------------- | ----------------- | ------------------------------------------------------------------------ |
-| `0xFFAA0000`  | `amo_total`       | Any S_CHECK with `pnd_bp=1` (AMO or uncached load/store)                 |
-| `0xFFAA0004`  | `amo_hit_dirty`   | `pnd_bp=1` AND cache hit AND dirty → goes through write-back-then-bypass |
-| `0xFFAA0008`  | `amo_hit_clean`   | `pnd_bp=1` AND cache hit AND clean → invalidated then bypassed           |
-| `0xFFAA000C`  | `amo_miss`        | `pnd_bp=1` AND cache miss → direct bypass                                |
-| `0xFFAA0010`  | `wb_total`        | Any entry into `S_WRITE_START` (AMO flush + ordinary dirty eviction)     |
-| `0xFFAA0014`  | `wb_cycles`       | One per cycle while FSM is in any `S_WRITE_*` state                      |
-
-**Aperture protocol:** the cache decodes `0xFFAA0000..0xFFAA001F` in
-`S_CHECK` before falling through to `S_BYPASS`. Reads return the
-indexed counter (mux on `addr(4:2)`) and ack in one cycle without
-issuing a bus request. Any write to that range resets all six counters.
-The address is in NEORV32 uncached space (`UC_BEGIN=0xF`) so it always
-hits the bypass decision and never pollutes the cache.
-
-**Status:** this patch was instrumental in disproving the original
-"AMO+dirty hot path causes livelock" hypothesis — `amo_hit_dirty`
-plateaued at ~9200 events for the entire boot, far below what a hot
-path would show. It then helped confirm the actual root cause (LR/SC
-livelock from strict reservation policy, fixed by `0004`) and the
-later D-cache-vs-seqcount story. Optional in production; drop if
-the SoC is bus-error-free without it.
-
-**Cost:** ~150 LE on EP4CE10 (6×32 FF + 32-bit 4:1 mux + 27-bit
-prefix comparator + writeback-state OR).
-
-**Removal:** Once the diagnostic is no longer wanted, drop this
-patch. `0xFFAA0000` returns to "uncached space that no SoC peripheral
-decodes" → bus error on access, harmless if nothing reads it.
 
 ### `0004-rvs-address-tracking.patch` (the kernel-boot fix)
 
@@ -195,10 +92,11 @@ the kernel's CAS retry never makes forward progress and
 - `git diff v1.12.9 origin/main -- rtl/core/neorv32_bus.vhd` is empty
   → bus reservation logic is unchanged. The latent-bug-meets-write-back
   combo is what made it manifest after `f774dac6`.
-- 0003 diagnostic counters showed `amo_hit_dirty` plateaus at ~9200
-  events for the entire boot (not the originally-suspected hot path),
-  and direct-UART `!MU` markers around `__mutex_unlock_fast`'s CAS
-  loop confirmed `before_fast` fires but `after_fast_ok` never does.
+- The (now-removed) 0003 diagnostic counters showed `amo_hit_dirty`
+  plateaus at ~9200 events for the entire boot (not the originally-
+  suspected hot path), and direct-UART `!MU` markers around
+  `__mutex_unlock_fast`'s CAS loop confirmed `before_fast` fires but
+  `after_fast_ok` never does.
 
 **Fix:** record LR.W's word address; clear `valid` only when (a) a
 fence fires, or (b) a store hits the reserved word.
@@ -231,7 +129,8 @@ LR+fence). All pass under GHDL.
 **Status:** verified on hardware. Required for any kernel that uses
 LR/SC-based atomics under interrupt load — including with D-cache
 off, since IRQ stack pushes still pass through `amo_rvs` whether or
-not the cache is enabled.
+not the cache is enabled. Not yet upstreamed (different scope from
+PR #1540); left local for now.
 
 ## Investigations that did NOT make it in
 
