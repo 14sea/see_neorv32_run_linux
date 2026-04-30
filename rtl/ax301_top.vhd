@@ -166,6 +166,8 @@ begin
     DCACHE_EN        => false  -- write-back D$ vs non-burst SDRAM is a net loss
                                   -- and triggers ktime_get_coarse seqcount-retry
                                   -- livelock; see neorv32_patches/README.md
+                                  -- Phase 3 SDRAM retry (2026-04-29) passed init_pipe_fs
+                                  -- but still hung at chr_dev_init (same family) — keep off
   )
   port map (
     clk_i        => CLOCK,
