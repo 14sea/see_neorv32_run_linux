@@ -6,10 +6,12 @@ because they have not yet been merged upstream.
 When/if these are accepted upstream, bump the `neorv32` submodule pointer
 and remove the corresponding patch file.
 
-## Status (2026-04-29)
+## Status (2026-04-30)
 
-**Submodule pin:** `9b1acf7e` (post-`#1540` merge on `origin/main`,
-v1.13.0.1).
+**Submodule pin:** `70393ec4` (`origin/main` HEAD, v1.13.0.1; +24
+commits past the `#1540` merge at `9b1acf7e` — image_gen / common.mk
+refactor + minor RTL fixes; none touch `rtl/core/neorv32_bus.vhd`, so
+`0004` still applies cleanly).
 
 **Active local patch:** only `0004-rvs-address-tracking.patch`. With
 this patch applied + `DCACHE_EN => false` in `rtl/ax301_top.vhd`, the
