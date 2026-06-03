@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 This project boots nommu Linux (kernel 6.6.83) on a NEORV32 RV32IMAC soft-core FPGA — the first known Linux boot on NEORV32. The NEORV32 has no MMU and no S-mode. Getting Linux running required 16 kernel patches across arch/riscv, scheduler, RCU, init, and drivers. We also found and fixed a [SC.W return value bug](https://github.com/stnolting/neorv32/pull/1520) in NEORV32's bus reservation station, enabling native atomic instructions in the kernel; the fix is now merged upstream and included in v1.12.9.
 
-The `neorv32` submodule tracks `origin/main` HEAD (currently `70393ec4`, v1.13.0.1, +24 commits past the `#1540` merge) plus one local RTL patch in `neorv32_patches/` (`0004-rvs-address-tracking.patch`). The two D-cache correctness fixes (formerly `0001` + `0002`) are now upstream as part of [PR #1540](https://github.com/stnolting/neorv32/pull/1540). See `neorv32_patches/README.md` for the full inventory and rationale.
+The `neorv32` submodule tracks `origin/main` HEAD (currently `644f0d10`, v1.13.1-31) with **one local RTL patch**: `neorv32_patches/0005-rvs-strict-clear-on-write.patch`. The two D-cache correctness fixes (formerly `0001` + `0002`) merged via [PR #1540](https://github.com/stnolting/neorv32/pull/1540). The LR/SC story is subtler: upstream's reservation-station rework ([PR #1556](https://github.com/stnolting/neorv32/pull/1556)) switched to *address-tracking* semantics, which **regress our single-hart, D-cache-off core** (a reservation survives a context switch → spurious `SC.W` success → boot hangs in `vfs_caches_init()`). `0005` reverts that back to the strict `valid <= lr` policy, which is both sufficient and required while D-cache is off. See `neorv32_patches/README.md` for the full inventory, the strict-vs-address-tracking/D-cache coupling, and HW-verify history.
 
 **D-cache is disabled** (`DCACHE_EN => false` in `rtl/ax301_top.vhd`). The new write-back D-cache architecture (PR #1513) requires burst-capable memory to be a net win; against the simple non-burst SDRAM controller in this project it is a net loss and triggers a `ktime_get_coarse_real_ts64` seqcount-retry livelock on hot kernel paths. With D-cache off the kernel boots cleanly to `nommu#` in ~20 s wall time (6× faster than the v1.12.9 baseline of ~118 s) thanks to a 3-phase SDRAM controller rewrite (200 µs init spec fix, pipelined back-to-back READ with 1-NOP gap, and open-row tracking that skips ACT for same-row hits).
 
@@ -41,13 +41,12 @@ see_neorv32_run_linux/
 
 All source code is included. Build order matters — later steps depend on earlier outputs.
 
-**Submodule:** `neorv32/` is a git submodule pointing to `stnolting/neorv32` at `origin/main` HEAD (`70393ec4`, v1.13.0.1). After cloning this repo, run `git submodule update --init --recursive` and then apply the patches in `neorv32_patches/` before building:
+**Submodule:** `neorv32/` is a git submodule pointing to `stnolting/neorv32` at `origin/main` HEAD (`644f0d10`, v1.13.1-31). After cloning this repo, initialize the submodule **and apply the one local RTL patch** (`0005-rvs-strict-clear-on-write.patch` — without it the kernel hangs in `vfs_caches_init()`):
 
 ```bash
 git submodule update --init --recursive
-cd neorv32
-for p in ../neorv32_patches/*.patch; do git apply "$p"; done
-cd ..
+cd neorv32 && git apply ../neorv32_patches/0005-rvs-strict-clear-on-write.patch && cd ..
+# neorv32/ now has the strict-reservation fix applied, ready to build.
 ```
 
 ### Prerequisites
@@ -297,7 +296,7 @@ python3 host/boot_sd.py --update         # ~17 s update + boot
 - `0xFFF40000` — CLINT (timer), `0xFFF50000` — UART0
 
 ### Key technical decisions
-- **Atomics use native RISC-V instructions** — NEORV32 has Zaamo + Zalrsc enabled. After fixing a [SC.W return value bug](https://github.com/stnolting/neorv32/pull/1520) in the RTL plus the LR/SC reservation policy in `neorv32_patches/0004-rvs-address-tracking.patch`, the kernel uses upstream unmodified `cmpxchg.h`, `atomic.h` with native LR/SC and AMO instructions (810 atomic instructions in the kernel binary). Verified with 11 userspace LR/SC tests.
+- **Atomics use native RISC-V instructions** — NEORV32 has Zaamo + Zalrsc enabled. After fixing a [SC.W return value bug](https://github.com/stnolting/neorv32/pull/1520) in the RTL plus a local LR/SC reservation policy patch (`0005-rvs-strict-clear-on-write.patch` — strict `valid <= lr` clearing; upstream's #1556 address-tracking regresses our D-cache-off single-hart core, see `neorv32_patches/README.md`), the kernel uses upstream unmodified `cmpxchg.h`, `atomic.h` with native LR/SC and AMO instructions (810 atomic instructions in the kernel binary). Verified with 11 userspace LR/SC tests.
 - **D-cache disabled** (`DCACHE_EN => false`) — see Project Overview at top. Re-enabling requires either burst-capable SDRAM or kernel patches to make hot reads (e.g., `ktime_get_coarse_real_ts64`) resilient to slow read windows.
 - **Scheduler modified to single-shot `__schedule()`** — prevents infinite `need_resched` loops caused by non-atomic `test_and_clear` racing with timer interrupts. Safe because single-core.
 - **`wfi` is upstream (not patched)** — testing confirmed that `wfi` works correctly; the timer interrupt wakes the CPU as expected.
@@ -328,4 +327,4 @@ Prefix: `riscv-none-elf-` (xPack 14.2.0). The stage2 Makefile defaults to this o
 10. **Kernel size must be close to 1,513,100 bytes**: If the Image is significantly larger (>1.55 MB), unwanted features got auto-enabled. Check the config items in pitfall #9.
 11. **Kernel compiler: xPack riscv-none-elf-gcc 14.2.0 only**: Buildroot's `riscv32-buildroot-linux-gnu-gcc` 12.4.0 compiles the kernel without errors, but the resulting Image hangs at `free_initmem()` on NEORV32 hardware. The hang is caused by a subtle code generation difference in GCC 12.4.0. Do NOT substitute compilers for the kernel build.
 12. **Don't enable D-cache without burst memory**: Setting `DCACHE_EN => true` in `rtl/ax301_top.vhd` against the current non-burst `wb_sdram_ctrl.v` is a net performance loss (every dirty eviction emits 16 single-word stores) AND triggers a `ktime_get_coarse_real_ts64` seqcount-retry livelock on hot kernel paths during fs_initcall. See `neorv32_patches/README.md` "Status" section for details. To enable D-cache, first add burst support to the SDRAM controller (or move to a burst-capable backend).
-13. **Apply RTL patches after submodule init**: After `git submodule update --init --recursive`, apply `neorv32_patches/*.patch` to the `neorv32/` working tree. The current pin (`70393ec4`) requires `0004-rvs-address-tracking.patch` for kernel boot — without it, `mutex_unlock()` livelocks under IRQ load because every IRQ trap-entry stack push clears the LR/SC reservation. The former `0001` (fence.i) and `0002` (AMO bypass) D-cache fixes are now upstream and must NOT be re-applied.
+13. **One RTL patch to apply (as of pin `644f0d10`)**: After `git submodule update --init --recursive`, apply `neorv32_patches/0005-rvs-strict-clear-on-write.patch` (`cd neorv32 && git apply ../neorv32_patches/0005-*.patch`). Without it the kernel hangs in `vfs_caches_init()`. The other former patches are upstream: `0001` (fence.i) + `0002` (AMO bypass) via [PR #1540](https://github.com/stnolting/neorv32/pull/1540). The LR/SC reservation is the one we still patch: upstream #1556 switched to *address-tracking*, which is correct for SMP but regresses our single-hart, D-cache-off core (a reservation survives a context switch → spurious `SC.W` success → hang). `0005` restores the strict `valid <= lr` policy. **This patch is coupled to `DCACHE_EN => false`** — if D-cache is ever re-enabled, the strict policy livelocks `ktime`/`mutex` hot paths and you must revisit the reservation semantics (see `neorv32_patches/README.md`).
