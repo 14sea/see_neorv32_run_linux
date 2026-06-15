@@ -6,16 +6,20 @@ because they have not yet been merged upstream.
 When/if these are accepted upstream, bump the `neorv32` submodule pointer
 and remove the corresponding patch file.
 
-## Status (2026-06-03)
+## Status (2026-06-15)
 
-**Submodule pin:** `644f0d10` (`origin/main` HEAD, v1.13.1-31; +153
-commits past the previous `70393ec4` pin — includes the v1.13.1
-release, the reservation-station rework, trap-CSR rework, `time[h]`
-CSR support, `Zbc`/full-`Zihpm` additions, OCD rework, and a
-configurable uncached address space). The last 9 commits past
-`b38162eb` are docs / `sw/example` / newlib / OCD only — **zero
-`rtl/core/` changes**, so the bitstream and stage2 binary are
-byte-identical across `b38162eb..644f0d10`.
+**Submodule pin:** `99fb4165` (`origin/main` HEAD, v1.13.1-104; +73
+commits past the previous `644f0d10` pin). This range **does** touch
+`rtl/core/` — fence/fence.i rework ([#1570](https://github.com/stnolting/neorv32/pull/1570),
+separate I/D fence signals, fence/cache-sync logic moved to the top),
+f-file image-format rework ([#1573](https://github.com/stnolting/neorv32/pull/1573)),
+HPM counter-event rework ([#1569](https://github.com/stnolting/neorv32/pull/1569)),
+removal of the `mhpmevent*h` CSRs on rv32 ([#1575](https://github.com/stnolting/neorv32/pull/1575)),
+and an RVC illegal-instruction-decode fix ([#1574](https://github.com/stnolting/neorv32/pull/1574)).
+So the bitstream and stage2 binary are **regenerated** (not
+byte-identical to the previous pin). **`rtl/core/neorv32_bus.vhd` is
+untouched in this range**, so `0005` still applies cleanly
+(`git apply --check` verified).
 
 **Active local patch (1):** `0005-rvs-strict-clear-on-write.patch`.
 
@@ -36,7 +40,8 @@ of a trap-entry register push, which is exactly when a preempted
 reservation must die). This is the same strict semantics the old
 `0004` patch originally *replaced*; the difference is **D-cache state**
 (see the coupling note below). HW-verified to `nommu#` (Uptime 18 s) on
-`b38162eb+0005` and again on `644f0d10+0005` (2026-06-03).
+`b38162eb+0005`, `644f0d10+0005` (2026-06-03), and `99fb4165+0005`
+(2026-06-15, both xmodem and SD fast-boot paths).
 
 > **Strict vs. address-tracking is coupled to D-cache on/off.** With
 > D-cache **on**, the strict policy livelocks `ktime`/`mutex` hot paths
@@ -133,8 +138,9 @@ exactly when a preempted reservation must die. Safe because RISC-V
 forbids memory accesses between `LR` and `SC`, so the only in-window
 writes come from a trap/preemption.
 
-**Status:** HW-verified `nommu#` (Uptime 18 s) on both `b38162eb+0005`
-and `644f0d10+0005` (2026-06-03). Valid only while `DCACHE_EN => false`.
+**Status:** HW-verified `nommu#` (Uptime 18 s) on `b38162eb+0005`,
+`644f0d10+0005` (2026-06-03), and `99fb4165+0005` (2026-06-15). Valid
+only while `DCACHE_EN => false`.
 
 **Future work — the "proper" upstream-mergeable fix (deferred 2026-06-03).**
 `0005` works by reverting to strict clearing, which is fine for our
