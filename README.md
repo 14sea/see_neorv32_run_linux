@@ -74,7 +74,7 @@ Result: 11/11 ALL PASSED
 
 ## Build from Source
 
-All source code is included in this repository. No external downloads needed.
+All source code is included in this repository, with one exception: the Linux kernel tarball `linux-6.6.83.tar.xz` (135 MB) is too large for GitHub and is **not tracked in git** — download it once from kernel.org (see Step 5).
 
 ### Prerequisites
 
@@ -87,7 +87,18 @@ All source code is included in this repository. No external downloads needed.
 | dtc (device tree compiler) | DTB compilation |
 | Python 3 + pyserial | Host boot script |
 
-### Step 1: Build openFPGALoader
+### Step 1: Initialize NEORV32 submodule and apply local RTL patch
+
+```bash
+git submodule update --init --recursive
+cd neorv32
+git apply ../neorv32_patches/0005-rvs-strict-clear-on-write.patch
+cd ..
+```
+
+> **Required:** This local reservation-station patch restores the strict LR/SC clearing policy needed by the current single-hart, D-cache-off AX301 design. Without it, the kernel can hang in `vfs_caches_init()`. See `neorv32_patches/README.md` for details.
+
+### Step 2: Build openFPGALoader
 
 ```bash
 cd tools/openFPGALoader
@@ -97,7 +108,7 @@ cmake .. && make -j$(nproc)
 
 > **Note:** The system-installed openfpgaloader (v0.12.0) does NOT support EP4CE6. Must build from source.
 
-### Step 2: Build FPGA bitstream
+### Step 3: Build FPGA bitstream
 
 ```bash
 cd quartus
@@ -105,7 +116,7 @@ quartus_sh --flow compile neorv32_demo
 quartus_cpf -c -o bitstream_compression=off output_files/neorv32_demo.sof ../output/neorv32_demo.rbf
 ```
 
-### Step 3: Build stage2 loader
+### Step 4: Build stage2 loader
 
 ```bash
 cd sw/stage2_loader
@@ -113,9 +124,12 @@ make NEORV32_HOME=../../neorv32 exe
 cp neorv32_exe.bin ../../output/stage2_loader.bin
 ```
 
-### Step 4: Build kernel + initramfs
+### Step 5: Build kernel + initramfs
 
 ```bash
+# Download the kernel tarball first if not already present (not tracked in git)
+wget https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-6.6.83.tar.xz
+
 # Extract and patch kernel
 tar xf linux-6.6.83.tar.xz && cd linux-6.6.83
 patch -p1 < ../kernel/neorv32_nommu.patch
@@ -136,13 +150,13 @@ make ARCH=riscv CROSS_COMPILE=riscv-none-elf- -j$(nproc)
 cp arch/riscv/boot/Image ../output/
 ```
 
-### Step 5: Compile device tree
+### Step 6: Compile device tree
 
 ```bash
 dtc -I dts -O dtb -o output/neorv32_ax301.dtb board/neorv32_ax301.dts
 ```
 
-### Step 6: Boot
+### Step 7: Boot
 
 ```bash
 python3 host/boot_linux.py --port /dev/ttyUSB0
@@ -152,7 +166,7 @@ This is the **default path** and requires only FPGA + SDRAM + UART — **no SD c
 
 ## Fast Boot from SD Card (optional)
 
-> **Optional** — only use this if you have an SD card wired to the FPGA's SPI pins. The xmodem path in Step 6 above works without any SD card.
+> **Optional** — only use this if you have an SD card wired to the FPGA's SPI pins. The xmodem path in Step 7 above works without any SD card.
 
 UART xmodem transfer takes ~145 s every boot. To skip it, the stage2 loader can read the kernel blob directly from an SD card over NEORV32's hardware SPI peripheral. Linux still runs from SDRAM — **the SD card is only read-only bulk storage at boot time**, so no kernel-side driver is required.
 
@@ -418,8 +432,8 @@ The NEORV32 is configured with these generics in `rtl/ax301_top.vhd`:
 ```
 see_neorv32_run_linux/
 ├── tools/openFPGALoader/  — openFPGALoader source (build from source)
-├── neorv32/               — NEORV32 RTL source (v1.12.8)
-├── linux-6.6.83.tar.xz   — Linux kernel tarball
+├── neorv32/               — NEORV32 RTL (git submodule → stnolting/neorv32 main + local patch 0005)
+├── linux-6.6.83.tar.xz   — Linux kernel tarball (not tracked — download from kernel.org)
 ├── rtl/                   — Custom FPGA design
 │   ├── ax301_top.vhd      — top-level: NEORV32 + SDRAM + UART + GPIO
 │   ├── wb_sdram_ctrl.v    — Wishbone → SDRAM bridge

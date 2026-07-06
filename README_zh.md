@@ -74,7 +74,7 @@ Result: 11/11 ALL PASSED
 
 ## 从源码构建
 
-所有源码均包含在本仓库中，无需额外下载。
+除一个例外，所有源码均包含在本仓库中：Linux 内核源码压缩包 `linux-6.6.83.tar.xz`（135 MB）超出 GitHub 大小限制，**未纳入 git 跟踪** —— 需从 kernel.org 下载一次（见步骤 5）。
 
 ### 前置依赖
 
@@ -87,7 +87,18 @@ Result: 11/11 ALL PASSED
 | dtc（设备树编译器） | DTB 编译 |
 | Python 3 + pyserial | 主机端启动脚本 |
 
-### 步骤 1：编译 openFPGALoader
+### 步骤 1：初始化 NEORV32 子模块并应用本地 RTL 补丁
+
+```bash
+git submodule update --init --recursive
+cd neorv32
+git apply ../neorv32_patches/0005-rvs-strict-clear-on-write.patch
+cd ..
+```
+
+> **必须执行：** 这个本地 reservation-station 补丁会恢复当前单核、D-cache 关闭的 AX301 设计所需的严格 LR/SC 清除策略。没有它，内核可能会卡在 `vfs_caches_init()`。详情见 `neorv32_patches/README.md`。
+
+### 步骤 2：编译 openFPGALoader
 
 ```bash
 cd tools/openFPGALoader
@@ -97,7 +108,7 @@ cmake .. && make -j$(nproc)
 
 > **注意：** 系统自带的 openfpgaloader（v0.12.0）不支持 EP4CE6，必须从源码编译。
 
-### 步骤 2：编译 FPGA 比特流
+### 步骤 3：编译 FPGA 比特流
 
 ```bash
 cd quartus
@@ -105,7 +116,7 @@ quartus_sh --flow compile neorv32_demo
 quartus_cpf -c -o bitstream_compression=off output_files/neorv32_demo.sof ../output/neorv32_demo.rbf
 ```
 
-### 步骤 3：编译 stage2 加载器
+### 步骤 4：编译 stage2 加载器
 
 ```bash
 cd sw/stage2_loader
@@ -113,9 +124,12 @@ make NEORV32_HOME=../../neorv32 exe
 cp neorv32_exe.bin ../../output/stage2_loader.bin
 ```
 
-### 步骤 4：编译内核 + initramfs
+### 步骤 5：编译内核 + initramfs
 
 ```bash
+# 若本地没有内核压缩包，先下载（未纳入 git 跟踪）
+wget https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-6.6.83.tar.xz
+
 # 解压并打补丁
 tar xf linux-6.6.83.tar.xz && cd linux-6.6.83
 patch -p1 < ../kernel/neorv32_nommu.patch
@@ -136,13 +150,13 @@ make ARCH=riscv CROSS_COMPILE=riscv-none-elf- -j$(nproc)
 cp arch/riscv/boot/Image ../output/
 ```
 
-### 步骤 5：编译设备树
+### 步骤 6：编译设备树
 
 ```bash
 dtc -I dts -O dtb -o output/neorv32_ax301.dtb board/neorv32_ax301.dts
 ```
 
-### 步骤 6：启动
+### 步骤 7：启动
 
 ```bash
 python3 host/boot_linux.py --port /dev/ttyUSB0
@@ -152,7 +166,7 @@ python3 host/boot_linux.py --port /dev/ttyUSB0
 
 ## 从 SD 卡快速启动（可选）
 
-> **可选** —— 仅当你把 SD 卡接到 FPGA 的 SPI 引脚时使用。上面步骤 6 的 xmodem 路径不需要任何 SD 卡。
+> **可选** —— 仅当你把 SD 卡接到 FPGA 的 SPI 引脚时使用。上面步骤 7 的 xmodem 路径不需要任何 SD 卡。
 
 UART xmodem 每次启动都要 ~145 s。为了跳过这一步，stage2 loader 可以通过 NEORV32 的硬件 SPI 外设直接从 SD 卡读取内核 blob。Linux 仍然运行在 SDRAM 中 —— **SD 卡只在启动时作为只读批量存储使用**，因此无需任何内核侧驱动。
 
@@ -418,8 +432,8 @@ NEORV32 在 `rtl/ax301_top.vhd` 中使用以下泛型参数配置：
 ```
 see_neorv32_run_linux/
 ├── tools/openFPGALoader/  — openFPGALoader 源码（需从源码编译）
-├── neorv32/               — NEORV32 RTL 源码（v1.12.8）
-├── linux-6.6.83.tar.xz   — Linux 内核源码压缩包
+├── neorv32/               — NEORV32 RTL（git 子模块 → stnolting/neorv32 main + 本地补丁 0005）
+├── linux-6.6.83.tar.xz   — Linux 内核源码压缩包（未纳入 git —— 从 kernel.org 下载）
 ├── rtl/                   — 自定义 FPGA 设计
 │   ├── ax301_top.vhd      — 顶层模块：NEORV32 + SDRAM + UART + GPIO
 │   ├── wb_sdram_ctrl.v    — Wishbone → SDRAM 桥接
