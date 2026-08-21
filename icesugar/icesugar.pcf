@@ -1,0 +1,25 @@
+# ================================================================================ #
+# iCESugar v1.5 pin constraints for the NEORV32 bring-up (iCE40UP5K-SG48)          #
+# Pin numbers taken from wuxx/icesugar: src/common/io.pcf and                       #
+# src/advanced/picorv32/picosoc/icesugar.pcf                                        #
+# ================================================================================ #
+
+# 12 MHz clock, driven by the iCELink MCU's MCO pin
+set_io -nowarn clk_12m    35
+
+# UART to the iCELink USB-CDC bridge (host side: /dev/ttyACM*)
+set_io -nowarn uart_rx     4
+set_io -nowarn uart_tx     6
+
+# On-board RGB LED (dedicated RGB driver pads, used via SB_RGBA_DRV).
+# Pad -> colour verified on hardware, one channel at a time.
+set_io -nowarn led_blue   39
+set_io -nowarn led_red    40
+set_io -nowarn led_green  41
+
+# On-board W25Q64 SPI flash (also holds the FPGA bitstream at offset 0;
+# the NEORV32 bootloader stores applications at 0x00400000 = 4 MB)
+set_io -nowarn flash_mosi 14
+set_io -nowarn flash_sck  15
+set_io -nowarn flash_csn  16
+set_io -nowarn flash_miso 17

@@ -1,0 +1,9 @@
+build/
+sw/hello/main.elf
+sw/hello/main.bin
+sw/hello/main.asm
+sw/hello/neorv32_exe.bin
+sw/hello/neorv32_*_image.vhd
+sw/hello/*.o
+sw/hello/image_gen
+sw/hello/elf.bin
