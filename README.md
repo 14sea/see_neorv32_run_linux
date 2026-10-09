@@ -92,11 +92,11 @@ All source code is included in this repository, with one exception: the Linux ke
 ```bash
 git submodule update --init --recursive
 cd neorv32
-git apply ../neorv32_patches/0005-rvs-strict-clear-on-write.patch
+git apply ../neorv32_patches/0006-rvs-stable-sc-request.patch
 cd ..
 ```
 
-> **Required:** This local reservation-station patch restores the strict LR/SC clearing policy needed by the current single-hart, D-cache-off AX301 design. Without it, the kernel can hang in `vfs_caches_init()`. See `neorv32_patches/README.md` for details.
+> **Required:** This one-line reservation-station fix keeps a successful `SC.W` a write for the whole bus transfer. Upstream turns it into a read one cycle after the strobe, which our SDRAM controller samples, so atomic `cmpxchg` stores are silently dropped and the kernel hangs in `vfs_caches_init()`. See `neorv32_patches/README.md` for details.
 
 ### Step 2: Build openFPGALoader
 
@@ -432,7 +432,7 @@ The NEORV32 is configured with these generics in `rtl/ax301_top.vhd`:
 ```
 see_neorv32_run_linux/
 ├── tools/openFPGALoader/  — openFPGALoader source (build from source)
-├── neorv32/               — NEORV32 RTL (git submodule → stnolting/neorv32 main + local patch 0005)
+├── neorv32/               — NEORV32 RTL (git submodule → stnolting/neorv32 release tag + local patch 0006)
 ├── linux-6.6.83.tar.xz   — Linux kernel tarball (not tracked — download from kernel.org)
 ├── rtl/                   — Custom FPGA design
 │   ├── ax301_top.vhd      — top-level: NEORV32 + SDRAM + UART + GPIO

@@ -92,11 +92,11 @@ Result: 11/11 ALL PASSED
 ```bash
 git submodule update --init --recursive
 cd neorv32
-git apply ../neorv32_patches/0005-rvs-strict-clear-on-write.patch
+git apply ../neorv32_patches/0006-rvs-stable-sc-request.patch
 cd ..
 ```
 
-> **必须执行：** 这个本地 reservation-station 补丁会恢复当前单核、D-cache 关闭的 AX301 设计所需的严格 LR/SC 清除策略。没有它，内核可能会卡在 `vfs_caches_init()`。详情见 `neorv32_patches/README.md`。
+> **必须执行：** 这个一行的 reservation-station 修复让成功的 `SC.W` 在整个总线传输期间保持为写操作。上游会在 strobe 之后一个周期把它改成读，而我们的 SDRAM 控制器正好在那时采样，导致原子 `cmpxchg` 的写入被悄悄丢弃，内核卡在 `vfs_caches_init()`。详情见 `neorv32_patches/README.md`。
 
 ### 步骤 2：编译 openFPGALoader
 
@@ -432,7 +432,7 @@ NEORV32 在 `rtl/ax301_top.vhd` 中使用以下泛型参数配置：
 ```
 see_neorv32_run_linux/
 ├── tools/openFPGALoader/  — openFPGALoader 源码（需从源码编译）
-├── neorv32/               — NEORV32 RTL（git 子模块 → stnolting/neorv32 main + 本地补丁 0005）
+├── neorv32/               — NEORV32 RTL（git 子模块 → stnolting/neorv32 release tag + 本地补丁 0006）
 ├── linux-6.6.83.tar.xz   — Linux 内核源码压缩包（未纳入 git —— 从 kernel.org 下载）
 ├── rtl/                   — 自定义 FPGA 设计
 │   ├── ax301_top.vhd      — 顶层模块：NEORV32 + SDRAM + UART + GPIO

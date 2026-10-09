@@ -14,68 +14,83 @@ tags**, not `origin/main` HEAD. This range touches `rtl/core/`
 extensively, so the bitstream and stage2 binary are **regenerated**.
 Integration changes needed:
 
-- **`rtl/core/neorv32_bus.vhd` changed** (17 commits: bus gateway/monitor
-  rework, `[bus] fix CPU stall und void access`, VHDL style cleanups).
-  The reservation-station *logic* is unchanged upstream (still #1556
-  address-tracking), only its VHDL style (`end process;`,
-  `end architecture;`), so `0005` was **rebased** with a 3-way apply —
-  its functional content is identical to the `99fb4165` version.
 - **RTL file list changed**: upstream added `neorv32_core_complex.vhd`
   and `neorv32_smc.vhd` and removed the memory-IP wrappers
   (`neorv32_{imem_rom,imem_ram,dmem_ram,bootrom_rom}.vhd`).
   `quartus/neorv32_demo.qsf` is now regenerated in the order of upstream
   `rtl/file_list_core.f`.
+- **`0005` replaced by `0006`** after the real root cause of the #1556
+  boot hang was found (see below).
 
-Quartus: 4,459 LE on EP4CE10, timing in the usual range (CLOCK setup
-−0.55 ns, S_CLK hold −0.97 ns). stage2: 7,908 B.
+Quartus: 4,480 LE on EP4CE10, timing in the usual range (CLOCK setup
+−0.55 ns, S_CLK hold −0.97 ns — both on the SDRAM I/O pins; internal
+paths have > +6 ns slack). stage2: 7,908 B.
 
-**Active local patch (1):** `0005-rvs-strict-clear-on-write.patch`.
+**Active local patch (1):** `0006-rvs-stable-sc-request.patch` — a
+one-line fix that **keeps upstream's #1556 address-tracking reservation
+station** and only makes the SC bus request stable for the whole
+transfer.
 
-The "zero local patches" milestone at `b38162eb` **did not hold**:
-upstream's reservation-station rework ([#1556](https://github.com/stnolting/neorv32/pull/1556),
-`0d0bb3e6`) replaced the old strict reservation policy with
-address-tracking (clear the reservation only on a *write* hitting the
-64-byte granule; reads and other-address writes leave it intact; fence
-no longer clears it). That is correct for an SMP coherent system, but
-**regresses our single-hart, no-coherence core**: a reservation now
-survives a context switch / preemption, so an `SC.W` that should fail
-spuriously succeeds → lock/refcount corruption → boot hangs in
-`vfs_caches_init()`. HW-bisected to exactly `0d0bb3e6` (2026-06-01).
+### Root cause of the #1556 boot hang (found 2026-10-09)
 
-`0005` restores the pre-#1556 **strict policy** — `valid <= lr`: set on
-`LR.W`, cleared by *any* other data memory access (including the stores
-of a trap-entry register push, which is exactly when a preempted
-reservation must die). This is the same strict semantics the old
-`0004` patch originally *replaced*; the difference is **D-cache state**
-(see the coupling note below). HW-verified to `nommu#` (Uptime 18 s) on
-`b38162eb+0005`, `644f0d10+0005` (2026-06-03), `99fb4165+0005`
-(2026-06-15, both xmodem and SD fast-boot paths), and `v1.13.6+0005`
-(2026-10-09, xmodem path + `test_shell` 3/3 + `amo` 11/11 LR/SC/AMO;
-SD path not re-run, no card in the slot).
+Upstream's reservation-station rework
+([#1556](https://github.com/stnolting/neorv32/pull/1556), `0d0bb3e6`)
+made our kernel hang in `vfs_caches_init()` (HW-bisected 2026-06-01).
+The explanation we used until 2026-10 — "a reservation survives a
+context switch, so a later `SC.W` spuriously succeeds" — was **wrong**:
+Linux clears the reservation itself with a dummy `sc x0, a2, PT_EPC(sp)`
+in `ret_from_exception` (`arch/riscv/kernel/entry.S`), and #1556's
+"failed SC from the owning core clears the reservation" rule honours
+that.
 
-> **Strict vs. address-tracking is coupled to D-cache on/off.** With
-> D-cache **on**, the strict policy livelocks `ktime`/`mutex` hot paths
-> (the original motivation for `0004`'s address-tracking — see the
-> historical inventory below). With D-cache **off** (our shipping
-> config, `DCACHE_EN => false`), that livelock does not occur, and the
-> strict policy is *required* for context-switch safety. Since we ship
-> D-cache off, strict (`0005`) is the correct choice. If D-cache is ever
-> re-enabled (needs burst SDRAM first), this trade-off must be revisited
-> — likely re-adopting upstream address-tracking **plus** an explicit
-> reservation-clear on trap entry.
+The real bug is in `neorv32_bus_amo_rvs::bus_request`, which is
+**combinational** and converts an SC into a READ whenever
+`sc_valid = '0'`:
 
-**Candidate upstream report:** #1556 address-tracking may regress
-single-hart, no-coherence cores that rely on the bus reservation being
-cleared by trap-entry stores for preemption safety.
+1. In the STB cycle of a *successful* SC, `sc_valid = '1'` → the request
+   goes out as a WRITE.
+2. On that same clock edge `reservation_station` clears `rsv.set`
+   (successful SC consumes the reservation).
+3. From STB+1 on `sc_valid = '0'`, so `bus_request` rewrites the
+   **still-pending** request to `rw = '0'`, `amo = '0'` — a READ.
+
+`rtl/wb_sdram_ctrl.v` drives `sdram_ctrl.sel` from its registered
+`pending` flag, and `sdram_ctrl` latches `wstrb = xbus_we ? xbus_sel : 0`
+in `S_IDLE` — i.e. at STB+1 or later (later still if a refresh is
+pending). It therefore sees a READ. **The SC returns `rd = 0` (success)
+but the store never reaches SDRAM**, so every successful `cmpxchg` is
+silently dropped. On hardware the printk ring buffer breaks on the very
+first `printk` (the boot shows the `ABCD…S` debug markers but not a
+single line of printk text, not even the banner) and the kernel finally
+hangs in `vfs_caches_init()`.
+
+This violates the XBUS waveform in upstream's own documentation
+(`docs/datasheet/soc_xbus.adoc`: `xbus_adr_o`/`dat_o`/`we_o`/`sel_o`
+stable from STB until ACK). It also explains every earlier observation:
+the strict policy (`0005`) and our old `0004` worked because they only
+gate the one-cycle STB and never touch `rw`; narrowing #1556's granule
+to 4 bytes did not help; and a simulation memory that samples in the STB
+cycle cannot reproduce it.
+
+**Evidence (2026-10-09):**
+
+| | AX301 hardware | GHDL sim, memory samples at STB+1 |
+|---|---|---|
+| `v1.13.6` unpatched | hangs after `S`, no printk output (2/2 runs) | only `ABCD`, no banner |
+| `v1.13.6` + `0006` | `nommu#` 18 s, `amo` 11/11, `test_shell` 3/3 | banner at cycle 4,704,790 |
+| `v1.13.6` + `0005` | `nommu#` 18 s | banner at cycle 4,704,790 |
+
+The repo bitstream built with `0006` is byte-identical (md5
+`554c7ad3…`) to the one verified on hardware above.
+
+**Upstream:** not reported yet — on hold pending further analysis.
 
 **Recently dropped (now upstream):**
 
 - `0004-rvs-address-tracking.patch` — the *address-tracking* version is
   now upstream via `0d0bb3e6`
   ([#1556](https://github.com/stnolting/neorv32/pull/1556), 2026-05-16),
-  so the patch file is gone. But see above: for our D-cache-off config
-  we do **not** want address-tracking, we want strict clearing, hence
-  `0005`. The companion commit `98c4ed6d` also made `fence` no longer
+  so the patch file is gone. The companion commit `98c4ed6d` also made `fence` no longer
   invalidate the reservation, and the out-of-band `bus.fence` signal was
   removed (`560e3392`, `794ecad7`, `e0ea1027`).
 - `0001-cpu-fence-i-drain-dcache.patch` — merged via
@@ -121,79 +136,50 @@ for p in ../neorv32_patches/*.patch; do
 done
 ```
 
-This applies `0005-rvs-strict-clear-on-write.patch` to
-`rtl/core/neorv32_bus.vhd`. Without it the kernel hangs in
+This applies `0006-rvs-stable-sc-request.patch` to
+`rtl/core/neorv32_bus.vhd`. Without it every successful `SC.W` is
+dropped by our SDRAM controller and the kernel hangs in
 `vfs_caches_init()` (see Status above).
 
 ## Inventory
 
-### `0005-rvs-strict-clear-on-write.patch` (ACTIVE — the kernel-boot fix)
+### `0006-rvs-stable-sc-request.patch` (ACTIVE — the kernel-boot fix)
 
-**Targeted:** `rtl/core/neorv32_bus.vhd`, `neorv32_bus_amo_rvs`.
+**Targeted:** `rtl/core/neorv32_bus.vhd`, `neorv32_bus_amo_rvs::bus_request`.
 
-**What it does:** reverts upstream #1556's address-tracking reservation
-station back to the pre-#1556 strict policy. The whole
-`neorv32_bus_amo_rvs` architecture is rewritten to the simpler form: a
-single global `valid` flag, `valid <= lr` on every data access (set only
-by `LR.W`, cleared by everything else), SC issues its bus write only
-while `valid` is high, and a local ACK + `rd=1` is generated when SC
-fails. No 64-byte granule, no core-ID, no turn-based fairness — none of
-which our single-hart core needs.
+**What it does:** uses the combinational `sc_valid` decision only in the
+STB cycle and the already-registered `sc_pend_fail` (set with STB,
+cleared with ACK) afterwards, so `rw`/`amo` of an SC request stay
+constant until the response:
 
-**Why:** see the Status section — upstream address-tracking lets a
-reservation survive a context switch on our no-coherence core, causing
-spurious SC success and a hang in `vfs_caches_init()`. Strict clearing
-kills the reservation on the trap-entry register-push stores, which is
-exactly when a preempted reservation must die. Safe because RISC-V
-forbids memory accesses between `LR` and `SC`, so the only in-window
-writes come from a trap/preemption.
+```vhdl
+if (sc = '1') and (((core_req_i.stb = '1') and (sc_valid = '0')) or (sc_pend_fail = '1')) then
+```
 
-**Status:** HW-verified `nommu#` (Uptime 18 s) on `b38162eb+0005`,
-`644f0d10+0005` (2026-06-03), `99fb4165+0005` (2026-06-15), and
-`v1.13.6+0005` (2026-10-09). Valid
-only while `DCACHE_EN => false`.
+(plus `sc_pend_fail` in the process sensitivity list). Upstream's
+address-tracking semantics, 64-byte granule, core-ID tracking and
+turn-based SMP fairness are all kept unchanged.
 
-**Future work — the "proper" upstream-mergeable fix (deferred 2026-06-03).**
-`0005` works by reverting to strict clearing, which is fine for our
-single-hart, D-cache-off config but throws away upstream's
-address-tracking (needed for SMP coherence, and for D-cache once we have
-burst SDRAM). The root cause is narrower than "address-tracking is
-wrong": it is that **#1556 removed every implicit reservation-clear on a
-trap / context switch** (the trap-entry register-push stores no longer
-hit the reserved granule, and `98c4ed6d` made `fence` stop clearing too),
-while RISC-V Linux — unlike ARM, which issues `CLREX` in `__switch_to` —
-relies on the *hardware* clearing the reservation across a context
-switch. So an LR's reservation can outlive a preemption and let a later
-`SC.W` spuriously succeed.
-
-The general fix that keeps address-tracking is therefore: **clear the
-reservation on trap entry in hardware** — route a one-cycle pulse from
-the CPU's trap/exception-taken logic (`neorv32_cpu_control`, the same
-event that vectors to `mtvec`) into `neorv32_bus_amo_rvs` and force
-`valid <= '0'`. That satisfies both worlds: address-tracking still gates
-SMP/coherent stores, *and* every context switch kills the reservation as
-the OS assumes. It is the equivalent of ARM's `CLREX`-on-exception, done
-in hardware.
-
-Why deferred, not done now:
-- More invasive than `0005`: #1556 deliberately removed the out-of-band
-  `bus.fence` side-band (`560e3392`/`794ecad7`/`e0ea1027`), so a new
-  trap signal would have to be re-plumbed CPU → bus, against the grain of
-  that cleanup.
-- Needs upstream buy-in to avoid re-forking; `0005` is the same strict
-  semantics the core shipped pre-#1556, so it is the lower-risk hold.
-- For our shipping config (single-hart, D-cache off) `0005` is already a
-  complete and correct fix for the spurious-SC-success — there is no
-  residual failure window to chase.
-
-Revisit this when: (a) re-enabling D-cache (after burst SDRAM lands), at
-which point strict clearing livelocks `ktime`/`mutex` and address-tracking
-+ trap-clear becomes mandatory; or (b) pursuing the zero-local-patch goal
-by upstreaming the trap-clear pulse to stnolting/neorv32.
+**Status:** HW-verified on `v1.13.6+0006` (2026-10-09): `nommu#` 18 s,
+`amo` 11/11 LR/SC/AMO, `test_shell` 3/3 (xmodem path; SD path not
+re-run, no card in the slot).
 
 ## Inventory (historical)
 
-### `0004-rvs-address-tracking.patch` (superseded — see `0005`)
+### `0005-rvs-strict-clear-on-write.patch` (superseded by `0006`, 2026-10-09)
+
+Reverted the whole `neorv32_bus_amo_rvs` back to the pre-#1556 strict
+policy (`valid <= lr` on every data access; SC issues its write only
+while `valid` is high, otherwise a local ACK + `rd = 1`). Carried from
+2026-06-01 to 2026-10-09 and HW-verified on `b38162eb`, `644f0d10`,
+`99fb4165` and `v1.13.6`. It worked because it never modified the
+request once issued — **not** for the reason we gave at the time
+(reservation surviving a context switch, see Status). It also threw
+away upstream's address-tracking and was coupled to `DCACHE_EN => false`
+(strict clearing livelocks the `ktime`/`mutex` paths with D-cache on);
+`0006` has neither drawback.
+
+### `0004-rvs-address-tracking.patch` (dropped — upstream via #1556)
 
 **Targeted:** `rtl/core/neorv32_bus.vhd`, `neorv32_bus_amo_rvs::rvs_control`.
 
@@ -231,13 +217,10 @@ mandatory.
 
 **Status:** verified on hardware while carried locally (2026-04-26 →
 2026-05). Dropped 2026-06-01 when upstream `b38162eb` shipped an
-equivalent address-tracking fix. **However**, with D-cache off the
-address-tracking semantics regress preemption safety (reservation
-survives context switch), so `0005` reverts upstream back to the strict
-policy that `0004` originally replaced. The `0004`→strict→`0005` arc is
-not a contradiction: `0004`'s address-tracking was needed *because
-D-cache was on at the time*; with D-cache off the strict policy is both
-sufficient and required.
+equivalent address-tracking fix. Upstream's version then hung the boot
+— not because of address-tracking, but because its `bus_request`
+rewrites a successful SC into a READ after the STB cycle (see Status,
+fixed by `0006`). `0004` never hit this because it only gated STB.
 
 ## Investigations that did NOT make it in
 
