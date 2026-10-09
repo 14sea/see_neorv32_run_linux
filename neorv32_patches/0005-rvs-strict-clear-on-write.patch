@@ -1,8 +1,8 @@
 diff --git a/rtl/core/neorv32_bus.vhd b/rtl/core/neorv32_bus.vhd
-index addd9657..c53074e6 100644
+index 9a7d4869..36e4425d 100644
 --- a/rtl/core/neorv32_bus.vhd
 +++ b/rtl/core/neorv32_bus.vhd
-@@ -836,8 +836,7 @@ end neorv32_bus_amo_rmw_rtl;
+@@ -902,8 +902,7 @@ end architecture;
  -- NEORV32 SoC - Processor Bus Infrastructure: Reservation Station                  --
  -- -------------------------------------------------------------------------------- --
  -- Reservation set controller for the RISC-V A/Zalrsc ISA extension.                --
@@ -12,7 +12,7 @@ index addd9657..c53074e6 100644
  -- -------------------------------------------------------------------------------- --
  -- The NEORV32 RISC-V Processor - https://github.com/stnolting/neorv32              --
  -- Copyright (c) NEORV32 contributors.                                              --
-@@ -868,103 +867,67 @@ end neorv32_bus_amo_rvs;
+@@ -934,46 +933,19 @@ end entity;
  
  architecture neorv32_bus_amo_rvs_rtl of neorv32_bus_amo_rvs is
  
@@ -64,10 +64,8 @@ index addd9657..c53074e6 100644
 +        valid <= lr; -- set on load-reservate; clear for all other memory requests
        end if;
      end if;
--  end process reservation_station;
-+  end process rvs_control;
- 
-   -- check if reservation-set operation --
+   end process;
+@@ -982,54 +954,46 @@ begin
    lr <= '1' when (core_req_i.amo = '1') and (core_req_i.amoop = "1000") else '0';
    sc <= '1' when (core_req_i.amo = '1') and (core_req_i.amoop = "1001") else '0';
  
@@ -79,7 +77,6 @@ index addd9657..c53074e6 100644
 -
 -  -- SC valid if sent by the same core to the same address granule and reservation still active --
 -  sc_valid <= rsv.set when (rsv.id = core_req_i.meta(3)) and (rsv.addr = core_req_i.addr(31 downto 6)) else '0';
--
 -
    -- System Bus Interface -------------------------------------------------------------------
    -- -------------------------------------------------------------------------------------------
@@ -96,7 +93,7 @@ index addd9657..c53074e6 100644
 +    else -- normal memory request or load-reservate operation
 +      sys_req_o.stb <= core_req_i.stb;
      end if;
-   end process bus_request;
+   end process;
  
 -  -- track pending SC operation --
 +  -- if the store-conditional instruction fails there will be no memory request
@@ -127,7 +124,7 @@ index addd9657..c53074e6 100644
 +        sc_pend <= '0';
        end if;
      end if;
-   end process sc_result;
+   end process;
  
    -- response --
 -  -- SC fail + bus ok    -> access OK, reservation invalid -> return 1
@@ -147,4 +144,4 @@ index addd9657..c53074e6 100644
 +                     x"00000000" when (sc_pend = '1') else -- SC succeeded: return 0
 +                     sys_rsp_i.data; -- normal access: pass-through
  
- end neorv32_bus_amo_rvs_rtl;
+ end architecture;

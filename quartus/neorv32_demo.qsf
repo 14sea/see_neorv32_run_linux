@@ -13,18 +13,16 @@ set_global_assignment -name VHDL_INPUT_VERSION VHDL_2008
 # ── NEORV32 RTL sources (neorv32 library, ordered per file_list_soc.f) ──────
 set_global_assignment -name VHDL_FILE ../neorv32/rtl/core/neorv32_package.vhd -library neorv32
 set_global_assignment -name VHDL_FILE ../neorv32/rtl/core/neorv32_sys.vhd -library neorv32
+set_global_assignment -name VHDL_FILE ../neorv32/rtl/core/neorv32_prim.vhd -library neorv32
 set_global_assignment -name VHDL_FILE ../neorv32/rtl/core/neorv32_cpu_decompressor.vhd -library neorv32
 set_global_assignment -name VHDL_FILE ../neorv32/rtl/core/neorv32_cpu_frontend.vhd -library neorv32
 set_global_assignment -name VHDL_FILE ../neorv32/rtl/core/neorv32_cpu_control.vhd -library neorv32
 set_global_assignment -name VHDL_FILE ../neorv32/rtl/core/neorv32_cpu_hwtrig.vhd -library neorv32
-set_global_assignment -name VHDL_FILE ../neorv32/rtl/core/neorv32_prim.vhd -library neorv32
 set_global_assignment -name VHDL_FILE ../neorv32/rtl/core/neorv32_cpu_counters.vhd -library neorv32
-set_global_assignment -name VHDL_FILE ../neorv32/rtl/core/neorv32_cpu_regfile.vhd -library neorv32
 set_global_assignment -name VHDL_FILE ../neorv32/rtl/core/neorv32_cpu_alu_shifter.vhd -library neorv32
 set_global_assignment -name VHDL_FILE ../neorv32/rtl/core/neorv32_cpu_alu_muldiv.vhd -library neorv32
 set_global_assignment -name VHDL_FILE ../neorv32/rtl/core/neorv32_cpu_alu_bitmanip.vhd -library neorv32
 set_global_assignment -name VHDL_FILE ../neorv32/rtl/core/neorv32_cpu_alu_fpu.vhd -library neorv32
-set_global_assignment -name VHDL_FILE ../neorv32/rtl/core/neorv32_cpu_alu_cfu.vhd -library neorv32
 set_global_assignment -name VHDL_FILE ../neorv32/rtl/core/neorv32_cpu_alu_cond.vhd -library neorv32
 set_global_assignment -name VHDL_FILE ../neorv32/rtl/core/neorv32_cpu_alu_crypto.vhd -library neorv32
 set_global_assignment -name VHDL_FILE ../neorv32/rtl/core/neorv32_cpu_alu.vhd -library neorv32
@@ -34,12 +32,10 @@ set_global_assignment -name VHDL_FILE ../neorv32/rtl/core/neorv32_cpu_trace.vhd 
 set_global_assignment -name VHDL_FILE ../neorv32/rtl/core/neorv32_cpu.vhd -library neorv32
 set_global_assignment -name VHDL_FILE ../neorv32/rtl/core/neorv32_cache.vhd -library neorv32
 set_global_assignment -name VHDL_FILE ../neorv32/rtl/core/neorv32_bus.vhd -library neorv32
+set_global_assignment -name VHDL_FILE ../neorv32/rtl/core/neorv32_core_complex.vhd -library neorv32
 set_global_assignment -name VHDL_FILE ../neorv32/rtl/core/neorv32_dma.vhd -library neorv32
-set_global_assignment -name VHDL_FILE ../neorv32/rtl/core/neorv32_imem.vhd -library neorv32
-set_global_assignment -name VHDL_FILE ../neorv32/rtl/core/neorv32_dmem.vhd -library neorv32
+set_global_assignment -name VHDL_FILE ../neorv32/rtl/core/neorv32_smc.vhd -library neorv32
 set_global_assignment -name VHDL_FILE ../neorv32/rtl/core/neorv32_xbus.vhd -library neorv32
-set_global_assignment -name VHDL_FILE ../neorv32/rtl/core/neorv32_bootrom.vhd -library neorv32
-set_global_assignment -name VHDL_FILE ../neorv32/rtl/core/neorv32_cfs.vhd -library neorv32
 set_global_assignment -name VHDL_FILE ../neorv32/rtl/core/neorv32_sdi.vhd -library neorv32
 set_global_assignment -name VHDL_FILE ../neorv32/rtl/core/neorv32_gpio.vhd -library neorv32
 set_global_assignment -name VHDL_FILE ../neorv32/rtl/core/neorv32_wdt.vhd -library neorv32
@@ -60,13 +56,15 @@ set_global_assignment -name VHDL_FILE ../neorv32/rtl/core/neorv32_debug_dtm.vhd 
 set_global_assignment -name VHDL_FILE ../neorv32/rtl/core/neorv32_debug_auth.vhd -library neorv32
 set_global_assignment -name VHDL_FILE ../neorv32/rtl/core/neorv32_debug_dm.vhd -library neorv32
 set_global_assignment -name VHDL_FILE ../neorv32/rtl/core/neorv32_top.vhd -library neorv32
+set_global_assignment -name VHDL_FILE ../neorv32/rtl/core/neorv32_cpu_alu_cfu.vhd -library neorv32
+set_global_assignment -name VHDL_FILE ../neorv32/rtl/core/neorv32_cpu_regfile.vhd -library neorv32
 set_global_assignment -name VHDL_FILE ../neorv32/rtl/core/neorv32_cache_ram.vhd -library neorv32
 set_global_assignment -name VHDL_FILE ../neorv32/rtl/core/neorv32_imem_image.vhd -library neorv32
-set_global_assignment -name VHDL_FILE ../neorv32/rtl/core/neorv32_imem_rom.vhd -library neorv32
-set_global_assignment -name VHDL_FILE ../neorv32/rtl/core/neorv32_imem_ram.vhd -library neorv32
-set_global_assignment -name VHDL_FILE ../neorv32/rtl/core/neorv32_dmem_ram.vhd -library neorv32
+set_global_assignment -name VHDL_FILE ../neorv32/rtl/core/neorv32_imem.vhd -library neorv32
+set_global_assignment -name VHDL_FILE ../neorv32/rtl/core/neorv32_dmem.vhd -library neorv32
 set_global_assignment -name VHDL_FILE ../neorv32/rtl/core/neorv32_bootrom_image.vhd -library neorv32
-set_global_assignment -name VHDL_FILE ../neorv32/rtl/core/neorv32_bootrom_rom.vhd -library neorv32
+set_global_assignment -name VHDL_FILE ../neorv32/rtl/core/neorv32_bootrom.vhd -library neorv32
+set_global_assignment -name VHDL_FILE ../neorv32/rtl/core/neorv32_cfs.vhd -library neorv32
 
 # ── AX301 SoC wrapper (work library) ────────────────────────────────────────
 set_global_assignment -name VHDL_FILE ../rtl/ax301_top.vhd
