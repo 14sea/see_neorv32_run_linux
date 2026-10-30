@@ -29,6 +29,20 @@ kernel in 9 s. SD path not re-run (no card in the slot).
 All boot times in this file before 2026-10-30 are with the old 6.6.83
 kernel (HZ=250 + scheduler patches).
 
+**I-cache 256 B → 4 KB (2026-10-30):** `ICACHE_NUM_BLOCKS => 64` in
+`rtl/ax301_top.vhd` (the default 4 blocks × 64 B = 256 B could not hold
+the kernel's hot paths). +6 LE, +4 M9K (27 of 30 on the EP4CE6); the
+timer-tick handler drops from ~170k to ~86k cycles and Linux 6.18 boots
+in 6 s instead of 9 s.
+
+**D-cache re-test (2026-10-30):** with the 4 KB I-cache, DMEM shrunk to
+4 KB and a 4 KB D-cache (29/30 M9K), the `ktime` seqcount livelock
+described below no longer occurs, but boot is slower (7 s vs 6 s) and
+1 of 3 boots hung in stage2's SDRAM exec test right after `fence.i`.
+Suspected cause: `fence.i` restarts instruction fetch without waiting
+for the D-cache write-back sweep to finish. Under analysis; D-cache
+stays off.
+
 **Do not pin v1.13.2 – v1.13.6** with this SDRAM controller: they carry
 the #1556 SC-request bug described below.
 

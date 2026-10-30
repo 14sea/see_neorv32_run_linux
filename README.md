@@ -47,17 +47,17 @@ Then paste the contents of `init_prompt.txt` as your first message. Claude Code 
 ...
 [    0.000000] Linux version 6.18.60 (riscv32)
 [    0.000000] Kernel command line: earlycon=neorv32,0xfff50000 console=ttyNEO0,115200
-[    0.704627] Memory: 30504K/32768K available (1240K kernel code, ...)
-[    7.506024] printk: legacy console [ttyNEO0] enabled
-[    8.766019] Run /init as init process
+[    0.489351] Memory: 30496K/32768K available (1249K kernel code, ...)
+[    4.888356] printk: legacy console [ttyNEO0] enabled
+[    5.675141] Run /init as init process
 
 ========================================
  NEORV32 nommu Linux — mini shell
 ========================================
 Linux (none) 6.18.60 riscv32
-Uptime:    9 s
-Total RAM: 30812 KB
-Free RAM:  30000 KB
+Uptime:    6 s
+Total RAM: 30808 KB
+Free RAM:  29988 KB
 Processes: 15
 
 Type 'help' for commands.
@@ -159,7 +159,7 @@ dtc -I dts -O dtb -o output/neorv32_ax301.dtb board/neorv32_ax301.dts
 python3 host/boot_linux.py --port /dev/ttyUSB0
 ```
 
-This is the **default path** and requires only FPGA + SDRAM + UART — **no SD card needed**. Kernel / DTB / initramfs are streamed to SDRAM over UART via xmodem on every boot (measured 2026-10-30: **~224 s** from `boot_linux.py` start to the shell prompt — ~215 s for FPGA programming, stage2 upload and the 1.7 MB xmodem transfer, ~9 s kernel boot).
+This is the **default path** and requires only FPGA + SDRAM + UART — **no SD card needed**. Kernel / DTB / initramfs are streamed to SDRAM over UART via xmodem on every boot (measured 2026-10-30: **~221 s** from `boot_linux.py` start to the shell prompt — the FPGA programming, stage2 upload and 1.7 MB xmodem transfer take all but the last ~6 s, which are the kernel boot).
 
 ## Fast Boot from SD Card (optional)
 
@@ -184,7 +184,7 @@ This takes ~160 s (one-time). The blob lives at raw LBA 0 — no MBR / no filesy
 python3 host/boot_sd.py --port /dev/ttyUSB0
 ```
 
-With the old 6.6 kernel this reached the shell in **~150 s**, about 90 s faster than xmodem at the time. It has not been re-measured with 6.18 (no SD card in the test board); the kernel's own share is now ~9 s.
+With the old 6.6 kernel this reached the shell in **~150 s**, about 90 s faster than xmodem at the time. It has not been re-measured with 6.18 (no SD card in the test board); the kernel's own share is now ~6 s.
 
 **Decoupled kernel / initramfs:** The kernel is built with `CONFIG_INITRAMFS_SOURCE=""` — initramfs is **not embedded** in the Image. Stage2 loads Image / DTB / initramfs as three independent sections from the SD blob, then patches the DTB's `chosen/linux,initrd-end` sentinel (`0xC0DEDEAD`) in RAM with the real end address before jumping to the kernel. Linux then unpacks the initramfs from the address passed via DT `chosen` properties.
 
@@ -221,7 +221,7 @@ python3 host/sd_pack.py --port /dev/ttyUSB0     # ~99s @ 230400
 
 | Mode | Host tool | Time to shell | When to use |
 |------|-----------|---------------|-------------|
-| xmodem | `boot_linux.py` | ~224 s (≈215 s transfer + 9 s boot) | No SD card, or debugging stage2 |
+| xmodem | `boot_linux.py` | ~221 s (≈215 s transfer + 6 s boot) | No SD card, or debugging stage2 |
 | SD blob | `boot_sd.py` | ~150 s (6.6-era, not re-measured) | Daily development (after one-time `sd_pack.py`) |
 
 ### Host/stage2 optimizations (Phase 1-6)
@@ -255,7 +255,7 @@ Stage2 loader modes (UART command after stage2 is uploaded): `l`=xmodem, `s`=SD 
   │  │  └───┬───┘  └──────┘  └──────┘  └─────────┘  │  │
   │  │      │                                        │  │
   │  │  ┌───┴───┐  ┌──────┐  ┌──────┐  ┌─────────┐  │  │
-  │  │  │Wishbone│  │ICACHE│  │D$:off│  │  CLINT  │  │  │
+  │  │  │Wishbone│  │I$:4KB│  │D$:off│  │  CLINT  │  │  │
   │  │  │  XBUS  │  │      │  │      │  │(timer)  │  │  │
   │  │  └───┬───┘  └──────┘  └──────┘  └─────────┘  │  │
   │  │      │                                        │  │
@@ -296,7 +296,7 @@ Stage2 loader (IMEM, 115200 baud)
   ↓ xmodem: initramfs (2.9 KB)    → SDRAM 0x41F80000, CRC-32 verify
   ↓ jump to 0x40000000 with a0=hartid, a1=DTB pointer
 Linux kernel (M-mode, nommu)
-  ↓ ~9 s boot → /init (mini shell from initramfs)
+  ↓ ~6 s boot → /init (mini shell from initramfs)
 ```
 
 ### FPGA Memory Map
@@ -340,8 +340,8 @@ After boot, the 32 MB SDRAM at `0x40000000` is used as follows:
 
 **Key runtime numbers** (from kernel log):
 - Total RAM: 32,768 KB (32 MB)
-- Available after boot: 30,504 KB (~30 MB free)
-- Kernel code: 1,240 KB | RW data: 146 KB | RO data: 178 KB | Init: 99 KB | BSS: 51 KB
+- Available after boot: 30,496 KB (~30 MB free)
+- Kernel code: 1,249 KB | RW data: 141 KB | RO data: 178 KB | Init: 102 KB | BSS: 51 KB
 
 ## Why Is This Hard?
 
@@ -357,17 +357,19 @@ Linux normally runs in S-mode (supervisor) with virtual memory. NEORV32 only has
 
 On 6.6 we saw `need_resched` ping-pong loops, RCU grace periods that never finished and work queues that never ran, and patched each one separately (single-shot `__schedule()`, synchronous SRCU, synchronous `populate_rootfs()`, …). Instrumenting the 6.18 scheduler and timer interrupt on hardware showed what was behind all of them:
 
-| | HZ=250 (default) | HZ=100 |
-|---|---|---|
-| Tick period | 200,000 cycles | 500,000 cycles |
-| Timer-interrupt handler, average | **~170,000 cycles (85 % of a tick)** | ~109,000 cycles (22 %) |
-| `__schedule()` incl. the tick serviced when IRQs come back on | ~357,000 cycles (1.8 ticks) | ~82,000 cycles (0.16 ticks) |
-| Switches longer than one tick | 98.7 % | 0 of 1,024 |
-| `while (need_resched())` iterations in one `schedule()` call | >4,096 (init, `ksoftirqd/0`, `kworker/u4:0`) — livelock | never reached 32 (38 repeats in 1,024 switches) |
+| I-cache | 256 B (NEORV32 default) | 256 B | **4 KB** | **4 KB** |
+|---|---|---|---|---|
+| HZ | 250 (kernel default) | 100 | 250 | 100 |
+| Tick period (cycles) | 200,000 | 500,000 | 200,000 | 500,000 |
+| Timer-interrupt handler, average | **~170,000 (85 % of a tick)** | ~109,000 (22 %) | ~86,000 (43 %) | ~74,000 (15 %) |
+| `__schedule()` incl. the tick serviced when IRQs come back on | ~357,000 (1.8 ticks) | ~82,000 | ~68,000 | ~55,000 |
+| Switches longer than one tick | 98.7 % | 0 % | 5 % | 0 % |
+| `while (need_resched())` iterations in one `schedule()` call | **>4,096 — livelock** | < 32 | < 32 | < 32 |
+| Result | **hang** | boots, 9 s | boots, 10 s | **boots, 6 s** |
 
-At HZ=250 the tick that becomes pending during every context switch sets `need_resched` again, so `schedule()` keeps switching between the same few tasks and none of them does any work: kworkers never run, and boot hangs a few seconds after the clocksource switch.
+At HZ=250 with the default 256-byte I-cache, the tick that becomes pending during every context switch sets `need_resched` again, so `schedule()` keeps switching between the same few tasks (init, `ksoftirqd/0`, `kworker/u4:0`) and none of them does any work: kworkers never run, and boot hangs a few seconds after the clocksource switch. The handler is that slow mainly because 256 bytes of I-cache cannot hold the kernel's hot paths — every miss refills a 64-byte line from SDRAM one word at a time.
 
-**Solution:** `CONFIG_HZ_100` — no scheduler, RCU, kthread or init patches.
+**Solution:** `CONFIG_HZ_100` (no scheduler, RCU, kthread or init patches) plus a **4 KB I-cache** (`ICACHE_NUM_BLOCKS => 64`, +6 LE and +4 M9K). Either change alone is enough to boot; HZ=100 is kept because even with 4 KB the tick still costs 43 % of an HZ=250 tick.
 
 ### 3. ~~`wfi` Halts the CPU~~ (Resolved)
 
@@ -411,8 +413,9 @@ The NEORV32 is configured with these generics in `rtl/ax301_top.vhd`:
 | `RISCV_ISA_U` | true | U-mode for Linux userspace |
 | `RISCV_ISA_Zaamo` | true | Atomic memory operations (AMO) |
 | `RISCV_ISA_Zalrsc` | true | Load-reserved / store-conditional (LR/SC) |
-| `ICACHE_EN` | true | Required for SDRAM instruction fetch (default 4 blocks × 64 B = 256 B) |
-| `DCACHE_EN` | **false** | Write-back D-cache against the non-burst SDRAM controller is slower and triggers a `ktime` seqcount livelock (see `neorv32_patches/README.md`) |
+| `ICACHE_EN` | true | Required for SDRAM instruction fetch |
+| `ICACHE_NUM_BLOCKS` | 64 | 64 × 64 B = **4 KB** I-cache (default 4 = 256 B): halves the timer-tick cost, boot 9 s → 6 s |
+| `DCACHE_EN` | **false** | Write-back D-cache against the non-burst SDRAM controller is a net loss. Re-tested 2026-10-30 with the 4 KB I-cache (DMEM cut to 4 KB to free M9Ks): the old `ktime` seqcount livelock is gone, but boot is slower (7 s vs 6 s) and one of three boots hung right after a `fence.i` — kept off (see `neorv32_patches/README.md`) |
 | `IMEM_SIZE` | 8 KB | Stage2 loader fits in 8 KB |
 | `DMEM_SIZE` | 8 KB | Kernel stack/heap scratch space |
 | `IO_UART0_RX_FIFO` | 4 | 4-entry FIFO for console input (generic is the depth, not log2) |
@@ -461,9 +464,10 @@ see_neorv32_run_linux/
 
 | Resource | Used | Available | % |
 |----------|------|-----------|---|
-| Logic Elements | 4,519 | 6,272 | 72% |
-| Memory bits | 166,912 | 276,480 | 60% |
-| Registers | 2,163 | 6,272 | 34% |
+| Logic Elements | 4,525 | 6,272 | 72% |
+| Memory bits | 198,912 | 276,480 | 72% |
+| M9K blocks | 27 | 30 | 90% |
+| Registers | 2,103 | 6,272 | 34% |
 | Embedded Multipliers | 0 | 30 | 0% |
 
 (Quartus fits for the EP4CE10 die with high-effort placement; the bitstream runs on the AX301's EP4CE6. Numbers from NEORV32 v1.13.7.)
@@ -471,7 +475,7 @@ see_neorv32_run_linux/
 ## Known Issues
 
 - **Kernel must be built with xPack `riscv-none-elf-gcc` 14.2.0:** On the old 6.6.83 kernel, building with Buildroot's `riscv32-buildroot-linux-gnu-gcc` 12.4.0 produced a binary that hung in `free_initmem()` (not re-tested on 6.18) — the last debug marker `L` (system_state = RUNNING) prints, but execution never reaches `M` (after free_initmem). This happens despite identical source code, patches, kernel config, and FPGA bitstream. The only variable is the compiler. Root cause is a subtle code generation difference in GCC 12.4.0 that triggers a hang on NEORV32's constrained environment. The Buildroot-built kernel also runs noticeably slower overall (clocksource switch at 13.8s vs 7.4s, triggers `sched: RT throttling activated`). **Always use the xPack bare-metal toolchain for the kernel.**
-- **Boot time ~9 s** (kernel start → shell, 6.18 + HZ=100); the xmodem transfer before it takes ~215 s — use the SD path for fast iteration.
+- **Boot time ~6 s** (kernel start → shell, 6.18 + HZ=100 + 4 KB I-cache); the xmodem transfer before it takes ~3.5 min — use the SD path for fast iteration.
 - **SDRAM intermittent init failure:** Occasionally fails on first power-on. Power-cycle the board (off for a few seconds) to resolve.
 - **Shell is minimal:** Only `uname`, `info`, `amo`, `help`, `exit`. The init binary is a custom C program, not busybox (to keep initramfs tiny).
 - **No network, no storage:** This is a bare UART console. The EP4CE6 has no room for additional peripherals.

@@ -161,6 +161,7 @@ begin
     OCD_EN           => false,
     DUAL_CORE_EN     => false,
     ICACHE_EN        => true,   -- I-cache needed for SDRAM execution (32-bit bus)
+    ICACHE_NUM_BLOCKS => 64,   -- 64 x 64 B = 4 KB (default 4 = 256 B): halves the timer-tick cost, boot 9 s -> 6 s
     CACHE_BLOCK_SIZE => 64,    -- 16 words per cache line (default)
     CACHE_BURSTS_EN  => false,  -- non-burst: sdram_ctrl does individual word reads
     DCACHE_EN        => false  -- write-back D$ vs non-burst SDRAM is a net loss

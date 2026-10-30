@@ -57,6 +57,8 @@ CONFIG_CLINT_TIMER=y
 # schedule()'s `while (need_resched())` loop livelocks (>4096 iterations):
 # kworkers never run and boot hangs. At HZ=100 the tick costs 22%, no switch
 # exceeds a tick, and the stock scheduler works with no patches.
+# (Numbers are with NEORV32's default 256 B I-cache; with the 4 KB I-cache in
+# rtl/ax301_top.vhd the tick costs 43% at HZ=250 / 15% at HZ=100. Keep 100.)
 CONFIG_HZ_100=y
 
 CONFIG_JUMP_LABEL=y

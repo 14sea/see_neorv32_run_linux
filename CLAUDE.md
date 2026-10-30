@@ -10,7 +10,9 @@ The `neorv32` submodule is pinned to release tag `v1.13.7` (`b1f30724`) with **n
 
 **Why `CONFIG_HZ_100` (measured 2026-10-30, instrumented 6.18 kernel):** at HZ=250 a tick is 200,000 cycles, but the CLINT timer-interrupt handler alone takes **~170,000 cycles on average (85 % of the tick)**. A `__schedule()` call therefore spans ~357,000 cycles (1.8 ticks) once the tick that became pending while IRQs were off is serviced; 98.7 % of switches exceeded a whole tick and 69 % of ticks re-set `need_resched`. `schedule()`'s `do { __schedule(); } while (need_resched());` then never exits — init, `ksoftirqd/0` and `kworker/u4:0` each looped >4,096 times without doing any work, so kworkers never ran and boot hung (at `populate_rootfs` / `pty_init` / `deferred_probe_initcall`, depending on timing). At HZ=100 (500,000-cycle tick) the handler costs ~109,000 cycles (22 %), `__schedule()` averages ~82,000 cycles, 0 of 1,024 switches exceeded a tick, only 9 % of ticks re-set `need_resched`, and no `schedule()` call looped 32 times — boot reaches `nommu#` in 9 s. This was the real reason for the 6.6-era "single-shot `__schedule()`" and synchronous RCU/async patches — not atomics.
 
-**D-cache is disabled** (`DCACHE_EN => false` in `rtl/ax301_top.vhd`). The new write-back D-cache architecture (PR #1513) requires burst-capable memory to be a net win; against the simple non-burst SDRAM controller in this project it is a net loss and triggers a `ktime_get_coarse_real_ts64` seqcount-retry livelock on hot kernel paths. With D-cache off the kernel boots cleanly to `nommu#` in ~9 s on 6.18 (~18–20 s on the old 6.6 kernel; 6.6 on v1.12.9 took ~118 s) thanks to HZ=100 and a 3-phase SDRAM controller rewrite (200 µs init spec fix, pipelined back-to-back READ with 1-NOP gap, and open-row tracking that skips ACT for same-row hits).
+**Why the tick was that slow — 4 KB I-cache (`ICACHE_NUM_BLOCKS => 64`, measured 2026-10-30):** the numbers above are with NEORV32's default I-cache of 4 blocks × 64 B = **256 B**, which cannot hold the kernel's hot paths (every miss refills a 64-byte line from SDRAM word by word, no bursts). With 64 blocks (4 KB; +6 LE, +4 M9K → 27 of the EP4CE6's 30) the handler drops to ~86,000 cycles at HZ=250 (43 %) and ~74,000 at HZ=100 (15 %); HZ=250 then boots too (10 s), and HZ=100 boots in **6 s**. Keep both: HZ=100 for margin, 4 KB I-cache for speed. 128 blocks (8 KB) would need more M9Ks than the EP4CE6 has.
+
+**D-cache is disabled** (`DCACHE_EN => false` in `rtl/ax301_top.vhd`). The new write-back D-cache architecture (PR #1513) requires burst-capable memory to be a net win; against the simple non-burst SDRAM controller in this project it is a net loss and triggers a `ktime_get_coarse_real_ts64` seqcount-retry livelock on hot kernel paths. **Re-tested 2026-10-30** on top of the 4 KB I-cache (DMEM cut 8→4 KB to free M9Ks, `DCACHE_NUM_BLOCKS => 64`, stage2 `__neorv32_ram_size=4k`): the seqcount livelock is gone, but boot is *slower* (7 s vs 6 s) and 1 of 3 boots hung in stage2's SDRAM exec test right after a `fence.i` — suspected `fence.i` vs D-cache write-back race, under analysis. So D-cache stays off. With D-cache off the kernel boots cleanly to `nommu#` in ~6 s on 6.18 (~18–20 s on the old 6.6 kernel; 6.6 on v1.12.9 took ~118 s) thanks to HZ=100, the 4 KB I-cache, and a 3-phase SDRAM controller rewrite (200 µs init spec fix, pipelined back-to-back READ with 1-NOP gap, and open-row tracking that skips ACT for same-row hits).
 
 Target hardware: Heijin AX301 board with Altera Cyclone IV EP4CE6 FPGA, 32 MB SDRAM, 50 MHz.
 
@@ -147,15 +149,15 @@ python3 host/boot_linux.py --port /dev/ttyUSB0
 
 ### Expected output
 
-About 224 s from `boot_linux.py` start to the prompt (measured 2026-10-30: ~215 s FPGA program + stage2 upload + 1.7 MB xmodem, ~9 s kernel boot):
+About 221 s from `boot_linux.py` start to the prompt (measured 2026-10-30: FPGA program + stage2 upload + 1.7 MB xmodem, then ~6 s kernel boot):
 ```
 ========================================
  NEORV32 nommu Linux — mini shell
 ========================================
 Linux (none) 6.18.60 ... riscv32
-Uptime:    9 s
-Total RAM: 30812 KB
-Free RAM:  30000 KB
+Uptime:    6 s
+Total RAM: 30808 KB
+Free RAM:  29988 KB
 Processes: 15
 
 Type 'help' for commands.
@@ -170,7 +172,7 @@ python3 host/test_shell.py /dev/ttyUSB0
 
 ### Fast boot from SD card (optional path)
 
-The stage2 loader can boot Linux directly from an SD card via NEORV32's hardware SPI, skipping the ~215 s xmodem transfer. **Linux still runs from SDRAM** — the SD card is purely read-only bulk storage at boot. No Linux kernel driver is involved.
+The stage2 loader can boot Linux directly from an SD card via NEORV32's hardware SPI, skipping the ~3.5 min xmodem transfer. **Linux still runs from SDRAM** — the SD card is purely read-only bulk storage at boot. No Linux kernel driver is involved.
 
 AX301 SD pins: `PIN_J15=SD_CLK`, `PIN_K16=SD_DI`, `PIN_J16=SD_DO`, `PIN_K15=SD_NCS`. Requires `IO_SPI_EN=true` in `rtl/ax301_top.vhd` (already set).
 
@@ -282,7 +284,7 @@ python3 host/boot_sd.py --update         # ~17 s update + boot
 1. **NEORV32 bootloader** (ROM at 0xFFE00000, 19200 baud) — uploads stage2_loader.bin
 2. **Stage2 loader** (IMEM, 115200 baud) — receives 'l' for Linux mode, then xmodem-transfers kernel+DTB+initramfs to SDRAM with CRC-32 verification
 3. **Kernel jump** — stage2 jumps to 0x40000000 with a0=hartid, a1=DTB pointer
-4. **Linux console** — ~9 s boot to mini shell (custom /init, not busybox)
+4. **Linux console** — ~6 s boot to mini shell (custom /init, not busybox)
 
 ### Memory map
 - `0x00000000` — 8 KB IMEM (stage2 loader, M9K BRAM)
@@ -293,7 +295,8 @@ python3 host/boot_sd.py --update         # ~17 s update + boot
 ### Key technical decisions
 - **Atomics use native RISC-V instructions** — NEORV32 has Zaamo + Zalrsc enabled. After fixing a [SC.W return value bug](https://github.com/stnolting/neorv32/pull/1520) in the RTL plus a one-line reservation-station fix ([PR #1661](https://github.com/stnolting/neorv32/pull/1661), upstream since v1.13.7 — keeps a successful `SC.W` a WRITE for the whole bus transfer; #1556 had turned it into a READ after STB, which our SDRAM controller samples, see `neorv32_patches/README.md`), the kernel uses upstream unmodified `cmpxchg.h`, `atomic.h` with native LR/SC and AMO instructions (810 atomic instructions in the kernel binary). Verified with 11 userspace LR/SC tests.
 - **D-cache disabled** (`DCACHE_EN => false`) — see Project Overview at top. Re-enabling requires either burst-capable SDRAM or kernel patches to make hot reads (e.g., `ktime_get_coarse_real_ts64`) resilient to slow read windows.
-- **`CONFIG_HZ_100`, vanilla scheduler** — the timer tick costs ~170k cycles, so HZ=250 livelocks `schedule()` (see Project Overview). The 6.6-era single-shot `__schedule()` patch is gone.
+- **`CONFIG_HZ_100`, vanilla scheduler** — with the default 256 B I-cache the timer tick costs ~170k cycles, so HZ=250 livelocks `schedule()` (see Project Overview). The 6.6-era single-shot `__schedule()` patch is gone.
+- **4 KB I-cache** (`ICACHE_NUM_BLOCKS => 64` in `rtl/ax301_top.vhd`) — halves the tick cost, boot 9 s → 6 s. Uses 27 of 30 M9Ks on the EP4CE6.
 - **`wfi` is upstream (not patched)** — testing confirmed that `wfi` works correctly; the timer interrupt wakes the CPU as expected.
 - **RISCV_ALTERNATIVE enabled (upstream default)** — the 6.6-era requirement to disable it is obsolete; with native atomics and HZ=100 it boots fine (Zbb/Zacas/Zawrs/Zicboz alternatives stay unpatched because the DT ISA is `acim`).
 - **UART driver uses kthread polling** — no IRQ, no work queues. Direct line discipline delivery. Builds on 6.6 and 6.18 (`.remove` signature guarded by `LINUX_VERSION_CODE`).
@@ -303,7 +306,7 @@ Prefix: `riscv-none-elf-` (xPack 14.2.0). The stage2 Makefile defaults to this o
 
 ## Important Constraints
 - Stage2 loader **must fit in 8 KB** IMEM (set via linker flags in Makefile)
-- The FPGA has only 6,272 LEs — no room for additional peripherals
+- The FPGA has only 6,272 LEs and 30 M9K blocks (27 used with the 4 KB I-cache) — little room for additional peripherals; Quartus fits for EP4CE10, so check CE6 limits by hand
 - SDRAM can intermittently fail on first power-on; power-cycle to resolve
 - The DTS advertises `riscv,isa-extensions = "a"` — NEORV32 has hardware atomic support (Zaamo + Zalrsc). The kernel uses native AMO/LR/SC instructions after a [SC.W RTL bug fix](https://github.com/stnolting/neorv32/pull/1520)
 
@@ -320,6 +323,6 @@ Prefix: `riscv-none-elf-` (xPack 14.2.0). The stage2 Makefile defaults to this o
 9. **`CONFIG_FPU` / `CONFIG_RISCV_ISA_V` are `=y` and that is fine**: an earlier version of this file claimed the defconfig disables them — it never did; the working 6.6 and 6.18 Images both have `FPU=y`, `RISCV_ISA_V=y`. FP/vector code is only enabled when the DT ISA string lists `f`/`d`/`v`, and ours is `acim`. Don't add `f`/`d`/`v` to the DTS — NEORV32 has no FPU or vector unit.
 10. **Kernel size ~1.72 MB** (6.18.60: 1,717,184 B). The SD layout reserves 2 MB for the Image slot (`host/sd_layout.py`); if a config change pushes it past that, `sd_pack.py` refuses to write (slot overflow).
 11. **Kernel compiler: xPack riscv-none-elf-gcc 14.2.0 only**: on the old 6.6.83 kernel, Buildroot's `riscv32-buildroot-linux-gnu-gcc` 12.4.0 produced an Image that hung at `free_initmem()` (~2× slower, `sched: RT throttling activated`). Not re-tested on 6.18 — given the HZ finding, a slower build may simply have made the old tick livelock worse. Keep using xPack 14.2.0 for the kernel.
-12. **Don't enable D-cache without burst memory**: Setting `DCACHE_EN => true` in `rtl/ax301_top.vhd` against the current non-burst `wb_sdram_ctrl.v` is a net performance loss (every dirty eviction emits 16 single-word stores) AND triggers a `ktime_get_coarse_real_ts64` seqcount-retry livelock on hot kernel paths during fs_initcall. See `neorv32_patches/README.md` "Status" section for details. To enable D-cache, first add burst support to the SDRAM controller (or move to a burst-capable backend).
+12. **Don't enable D-cache without burst memory**: Setting `DCACHE_EN => true` in `rtl/ax301_top.vhd` against the current non-burst `wb_sdram_ctrl.v` is a net performance loss (every dirty eviction emits 16 single-word stores). With the old 256 B I-cache it also triggered a `ktime_get_coarse_real_ts64` seqcount-retry livelock during fs_initcall; with the 4 KB I-cache that is gone, but boot is still slower (7 s vs 6 s), it only fits by shrinking DMEM to 4 KB, and 1 of 3 boots hung right after a `fence.i` (suspected race between `fence.i` and the D-cache write-back). See `neorv32_patches/README.md` "Status" section for details. To enable D-cache, first add burst support to the SDRAM controller (or move to a burst-capable backend).
 13. **No RTL patches to apply (as of pin `v1.13.7`)**: all our neorv32 fixes are upstream — `0001` (fence.i) + `0002` (AMO bypass) via [PR #1540](https://github.com/stnolting/neorv32/pull/1540), `0006` (SC request stable until response) via [PR #1661](https://github.com/stnolting/neorv32/pull/1661). **Never pin v1.13.2–v1.13.6**: their #1556 `bus_request` rewrites a successful SC from WRITE to READ one cycle after STB, and our `sdram_ctrl` latches the request at STB+1 or later, so the SC reports success but the store is dropped (symptom: **no printk output at all** after stage2's `Booting Linux...` — on the old 6.6 kernel only its `ABCD…S` debug markers appeared — then a hang in `vfs_caches_init()`). If an upstream bump ever shows that symptom again, re-check `neorv32_bus_amo_rvs::bus_request` for request instability after STB. Don't trust a simulation memory model that samples in the STB cycle — it cannot reproduce this bug (see `neorv32_patches/README.md`).
-14. **`CONFIG_HZ_100` is mandatory**: with the default HZ=250 the timer tick (~170k cycles) eats 85 % of each 200k-cycle tick and `schedule()` livelocks; boot hangs silently a few seconds after `clocksource: Switched to clocksource clint_clocksource` (exact spot varies). Check `grep '^CONFIG_HZ=' .config` → `100`. To debug a boot hang, add `initcall_debug ignore_loglevel` to `CONFIG_CMDLINE` (`ignore_loglevel` is needed — initcall lines are KERN_DEBUG) and resolve the `calling 0x…` addresses with `System.map` (KALLSYMS is off).
+14. **`CONFIG_HZ_100` is mandatory**: with the default HZ=250 and NEORV32's default 256 B I-cache, the timer tick (~170k cycles) eats 85 % of each 200k-cycle tick and `schedule()` livelocks (with the 4 KB I-cache HZ=250 boots, but the tick still costs 43 % — keep 100); boot hangs silently a few seconds after `clocksource: Switched to clocksource clint_clocksource` (exact spot varies). Check `grep '^CONFIG_HZ=' .config` → `100`. To debug a boot hang, add `initcall_debug ignore_loglevel` to `CONFIG_CMDLINE` (`ignore_loglevel` is needed — initcall lines are KERN_DEBUG) and resolve the `calling 0x…` addresses with `System.map` (KALLSYMS is off).
