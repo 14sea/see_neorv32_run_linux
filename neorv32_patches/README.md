@@ -22,8 +22,12 @@ Quartus: 4,519 LE on EP4CE10, CLOCK setup −0.79 ns, S_CLK hold −0.97 ns
 (SDRAM I/O pins, usual range). stage2: 7,908 B.
 
 **HW-verified 2026-10-30** (unpatched `v1.13.7`, xmodem path): `nommu#`
-Uptime 18 s, `amo` 11/11 LR/SC/AMO, `test_shell` 3/3. SD path not
-re-run (no card in the slot).
+Uptime 18 s with the Linux 6.6.83 kernel, `amo` 11/11 LR/SC/AMO,
+`test_shell` 3/3; the same bitstream boots the vanilla Linux 6.18.60
+kernel in 9 s. SD path not re-run (no card in the slot).
+
+All boot times in this file before 2026-10-30 are with the old 6.6.83
+kernel (HZ=250 + scheduler patches).
 
 **Do not pin v1.13.2 – v1.13.6** with this SDRAM controller: they carry
 the #1556 SC-request bug described below.
@@ -101,7 +105,7 @@ cycle cannot reproduce it.
 | `v1.13.6` unpatched | hangs after `S`, no printk output (2/2 runs) | only `ABCD`, no banner |
 | `v1.13.6` + `0006` | `nommu#` 18 s, `amo` 11/11, `test_shell` 3/3 | banner at cycle 4,704,790 |
 | `v1.13.6` + `0005` | `nommu#` 18 s | banner at cycle 4,704,790 |
-| `v1.13.7` unpatched (contains #1661), 2026-10-30 | `nommu#` 18 s, `amo` 11/11, `test_shell` 3/3 | — |
+| `v1.13.7` unpatched (contains #1661), 2026-10-30 | `nommu#` 18 s (Linux 6.6) / 9 s (Linux 6.18), `amo` 11/11, `test_shell` 3/3 | — |
 
 The repo bitstream built with `0006` is byte-identical (md5
 `554c7ad3…`) to the one verified on hardware above.

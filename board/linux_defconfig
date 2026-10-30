@@ -1,4 +1,4 @@
-# Linux kernel defconfig for NEORV32 RV32IMAC nommu on AX301
+# Linux 6.18 kernel defconfig for NEORV32 RV32IMAC nommu on AX301
 # Based on arch/riscv/configs/nommu_virt_defconfig, adapted for NEORV32 hardware
 
 # CONFIG_CPU_ISOLATION is not set
@@ -37,13 +37,13 @@ CONFIG_ARCH_RV32I=y
 CONFIG_NONPORTABLE=y
 # CONFIG_SMP is not set
 CONFIG_RISCV_ISA_C=y
-CONFIG_RISCV_ISA_M=y
+# NEORV32 implements none of these; runtime-gated anyway, keep them out
+# CONFIG_RISCV_ISA_ZBA is not set
+# CONFIG_RISCV_ISA_XTHEADVECTOR is not set
 
 # ── Memory: SDRAM at 0x40000000, 32 MB ──
 CONFIG_PHYS_RAM_BASE_FIXED=y
 CONFIG_PHYS_RAM_BASE=0x40000000
-# nommu: PAGE_OFFSET must equal PHYS_RAM_BASE (kernel linked at this address)
-CONFIG_PAGE_OFFSET=0x40000000
 
 # ── Boot command line ──
 CONFIG_CMDLINE="earlycon=neorv32,0xfff50000 console=ttyNEO0,115200"
@@ -51,6 +51,13 @@ CONFIG_CMDLINE_FORCE=y
 
 # ── Timer ──
 CONFIG_CLINT_TIMER=y
+# HZ=100 is REQUIRED (measured on HW, 6.18.60): the timer-interrupt handler
+# takes ~170k cycles, i.e. 85% of a 200k-cycle HZ=250 tick. Every __schedule()
+# then spans ~1.8 ticks, the pending tick re-sets need_resched, and
+# schedule()'s `while (need_resched())` loop livelocks (>4096 iterations):
+# kworkers never run and boot hangs. At HZ=100 the tick costs 22%, no switch
+# exceeds a tick, and the stock scheduler works with no patches.
+CONFIG_HZ_100=y
 
 CONFIG_JUMP_LABEL=y
 # CONFIG_PARTITION_ADVANCED is not set

@@ -4,6 +4,8 @@ This document chronicles the debugging journey from "kernel compiled" to "shell 
 
 The NEORV32 is a microcontroller-class RISC-V soft-core with no MMU, no S-mode, and no atomic instructions. No one has run Linux on it before, so there was no reference implementation to follow.
 
+> **Historical note (2026-10-30):** this log covers the original Linux **6.6.83** bring-up. Many of the scheduler / RCU / async / `RISCV_ALTERNATIVE` workarounds below were later traced to one measurable cause: on this core the timer-interrupt handler takes ~170k cycles, 85 % of an HZ=250 tick, so `schedule()` livelocks. The project now runs **vanilla Linux 6.18.60 with `CONFIG_HZ_100`** and none of those patches — see "Why Is This Hard?" in `README.md`. (The atomics in this log were also fixed in hardware later; the kernel now uses native AMO/LR/SC.)
+
 ---
 
 ## Phase 1: RTL Preparation

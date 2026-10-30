@@ -217,7 +217,7 @@ application on power-up.
 
 The parent project boots nommu Linux on a Cyclone IV with **32 MB of external SDRAM**.
 The iCESugar has **no external DRAM at all** — 128 KB of SPRAM plus 16 KB of EBR,
-144 KB total. `output/Image` alone is 1,513,284 bytes, more than ten times the entire
+144 KB total. `output/Image` alone is 1,717,184 bytes (Linux 6.18), more than ten times the entire
 on-chip memory, and the booted system reports 30 MB of free RAM. Even an XIP kernel
 executing `.text` from the 8 MB SPI flash still needs megabytes of RAM for
 `.bss`/slab/stack. This is a two-orders-of-magnitude gap, not a tuning problem.

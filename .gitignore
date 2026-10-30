@@ -29,10 +29,10 @@ output/Image
 output/*.cpio.gz
 
 # Extracted kernel source
-linux-6.6.83/
+linux-*/
 
-# Linux kernel tarball (135 MB, too large for GitHub)
-linux-6.6.83.tar.xz
+# Linux kernel tarball (~150 MB, too large for GitHub)
+linux-*.tar.xz
 
 # openFPGALoader build directory
 tools/openFPGALoader/build/

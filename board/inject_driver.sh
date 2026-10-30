@@ -56,17 +56,4 @@ else
     echo "  Makefile already patched, skipping."
 fi
 
-# 4. Patch arch/riscv/Kconfig to make PAGE_OFFSET user-configurable
-RISCV_KCONFIG="$KERN_DIR/arch/riscv/Kconfig"
-if grep -q '^config PAGE_OFFSET' "$RISCV_KCONFIG" && \
-   ! grep -A1 '^config PAGE_OFFSET' "$RISCV_KCONFIG" | grep -q 'prompt\|Page offset'; then
-    echo "Patching arch/riscv/Kconfig: making PAGE_OFFSET user-configurable ..."
-    sed -i '/^config PAGE_OFFSET$/,/^$/{
-        /^\thex$/c\\thex "Virtual page offset (must match PHYS_RAM_BASE for nommu)"
-    }' "$RISCV_KCONFIG"
-    echo "  PAGE_OFFSET now configurable via defconfig."
-else
-    echo "  PAGE_OFFSET already configurable or not found, skipping."
-fi
-
-echo "Done. NEORV32 patches applied to $KERN_DIR"
+echo "Done. NEORV32 UART driver injected into $KERN_DIR"

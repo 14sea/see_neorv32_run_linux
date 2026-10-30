@@ -27,6 +27,7 @@
 #include <linux/timer.h>
 #include <linux/delay.h>
 #include <linux/io.h>
+#include <linux/version.h>
 
 /* Forward declare debug function */
 static void neo_uart_dbg(char c);
@@ -367,6 +368,15 @@ static int neorv32_probe(struct platform_device *pdev)
 	return ret;
 }
 
+/* platform_driver.remove returns void since 6.11 */
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 11, 0)
+static void neorv32_remove(struct platform_device *pdev)
+{
+	struct uart_port *port = platform_get_drvdata(pdev);
+
+	uart_remove_one_port(&neorv32_uart_driver, port);
+}
+#else
 static int neorv32_remove(struct platform_device *pdev)
 {
 	struct uart_port *port = platform_get_drvdata(pdev);
@@ -374,6 +384,7 @@ static int neorv32_remove(struct platform_device *pdev)
 	uart_remove_one_port(&neorv32_uart_driver, port);
 	return 0;
 }
+#endif
 
 static const struct of_device_id neorv32_of_match[] = {
 	{ .compatible = "stnolting,neorv32-uart" },

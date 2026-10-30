@@ -16,7 +16,7 @@ STRIP = $(RISCV_LINUX_PREFIX)strip
 HOSTCC = gcc
 
 # Path to extracted Linux source (set by caller or default)
-LINUX_DIR ?= ../../linux-6.6.83
+LINUX_DIR ?= ../../linux-6.18.60
 
 CFLAGS = -nostdlib -nostartfiles -fpie -mcmodel=medany \
          -fno-plt -static -Wl,-pie -Wl,--no-dynamic-linker \

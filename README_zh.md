@@ -1,8 +1,8 @@
 # See NEORV32 Run Linux
 
-在 **NEORV32** RV32IMAC 软核 FPGA 上启动 nommu Linux（内核 6.6.83）—— 据信是 NEORV32 上首次成功的 Linux 启动。
+在 **NEORV32** RV32IMAC 软核 FPGA 上启动 nommu Linux（内核 **6.18.60 LTS**）—— 据信是 NEORV32 上首次成功的 Linux 启动。
 
-NEORV32 是一个微控制器级处理器，**没有 MMU**、**没有 S-mode**。让 Linux 在其上运行需要对内核的 arch/riscv、调度器、RCU、init 和驱动子系统进行 16 个补丁。
+NEORV32 是一个微控制器级处理器，**没有 MMU**、**没有 S-mode**。最初在 Linux 6.6.83 上移植时，需要对内核的 arch/riscv、调度器、RCU、init 和驱动子系统打 16 个补丁。在 6.18 上这些补丁都不再需要：实机测量把调度器 / RCU / 工作队列的卡死追溯到同一个问题 —— 在这颗核上，定时器 tick 的开销对 HZ=250 来说太大 —— 所以现在的内核是**原版 6.18.60**，只加了一个树外 UART 驱动和一份设置了 `CONFIG_HZ_100` 的 defconfig。
 
 我们还发现并修复了 [NEORV32 SC.W 指令的一个 bug](https://github.com/stnolting/neorv32/pull/1520) —— store-conditional 返回的是旧数据而非成功/失败状态码。此修复使内核能够使用原生 RISC-V 原子指令（LR/SC + AMO）。
 
@@ -18,7 +18,7 @@ NEORV32 是一个微控制器级处理器，**没有 MMU**、**没有 S-mode**�
 | `CLAUDE.md` | **AI 代理** | 供 [Claude Code](https://claude.ai/code) 使用的机器可读构建流程、约束和已知陷阱 |
 | `init_prompt.txt` | **Claude Code 启动脚本** | 粘贴到 Claude Code 中，即可自动从源码完成整个项目的构建 |
 | `implementation_plan_en.md` / `implementation_plan_zh.md` | **开发者** | 从零开始的详细实施计划，包含硬件验证、内核移植、驱动开发等全部阶段 |
-| `BUILD_LOG.md` | **开发者** | 从"内核编译通过"到"shell 提示符"的 105 次构建调试历程 —— 记录了每次失败的原因和修复方法 |
+| `BUILD_LOG.md` | **开发者** | 最初 Linux 6.6.83 移植时，从"内核编译通过"到"shell 提示符"的 105 次构建调试历程 —— 记录了每次失败的原因和修复方法（历史记录；后来查明的共同根因见"为什么这很难？"） |
 
 要使用 Claude Code 复现完整构建，在仓库根目录打开终端并运行：
 ```bash
@@ -41,23 +41,23 @@ claude
 
 ```
 [stage2] Linux direct boot mode
-[4] Sending kernel (1,513,100 bytes) via xmodem...
+[4] Sending kernel (1,717,184 bytes) via xmodem...
   [xmodem] Transfer complete
   [kernel] CRC MATCH: xxxxxxxx ✓
 ...
-[    0.000000] Linux version 6.6.83 (riscv32)
+[    0.000000] Linux version 6.18.60 (riscv32)
 [    0.000000] Kernel command line: earlycon=neorv32,0xfff50000 console=ttyNEO0,115200
-[    0.000000] Memory: 30908K/32768K available (1076K kernel code, ...)
-[   85.896116] printk: console [ttyNEO0] enabled
-[   98.580187] Run /init as init process
+[    0.704627] Memory: 30504K/32768K available (1240K kernel code, ...)
+[    7.506024] printk: legacy console [ttyNEO0] enabled
+[    8.766019] Run /init as init process
 
 ========================================
  NEORV32 nommu Linux — mini shell
 ========================================
-Linux (none) 6.6.83 riscv32
-Uptime:    97 s
-Total RAM: 31004 KB
-Free RAM:  30264 KB
+Linux (none) 6.18.60 riscv32
+Uptime:    9 s
+Total RAM: 30812 KB
+Free RAM:  30000 KB
 Processes: 14
 
 Type 'help' for commands.
@@ -74,7 +74,7 @@ Result: 11/11 ALL PASSED
 
 ## 从源码构建
 
-除一个例外，所有源码均包含在本仓库中：Linux 内核源码压缩包 `linux-6.6.83.tar.xz`（135 MB）超出 GitHub 大小限制，**未纳入 git 跟踪** —— 需从 kernel.org 下载一次（见步骤 5）。
+除一个例外，所有源码均包含在本仓库中：Linux 内核源码压缩包 `linux-6.18.60.tar.xz`（约 150 MB）超出 GitHub 大小限制，**未纳入 git 跟踪** —— 需从 kernel.org 下载一次（见步骤 5）。
 
 ### 前置依赖
 
@@ -123,26 +123,26 @@ cp neorv32_exe.bin ../../output/stage2_loader.bin
 
 ### 步骤 5：编译内核 + initramfs
 
+内核是**原版 6.18.60** —— 不打任何内核补丁，只注入 UART 驱动并拷入板级 defconfig。
+
 ```bash
 # 若本地没有内核压缩包，先下载（未纳入 git 跟踪）
-wget https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-6.6.83.tar.xz
+wget https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-6.18.60.tar.xz
+tar xf linux-6.18.60.tar.xz
 
-# 解压并打补丁
-tar xf linux-6.6.83.tar.xz && cd linux-6.6.83
-patch -p1 < ../kernel/neorv32_nommu.patch
-../board/inject_driver.sh .
+# 注入 NEORV32 UART 驱动和板级 defconfig
+board/inject_driver.sh linux-6.18.60
+cp board/linux_defconfig linux-6.18.60/arch/riscv/configs/neorv32_ax301_defconfig
 
-# 编译 initramfs（使用 Buildroot Linux 工具链以支持 PIE）
-cd ../sw/initramfs
-make LINUX_DIR=../../linux-6.6.83
-cp neo_initramfs.cpio.gz ../../output/
+# 编译 initramfs（使用 Buildroot Linux 工具链以支持 PIE）。它不嵌入内核：
+# 由 stage2 加载，并通过 DTB 告诉内核位置。
+make -C sw/initramfs LINUX_DIR=../../linux-6.18.60
+cp sw/initramfs/neo_initramfs.cpio.gz output/
 
-# 修正 defconfig 中的 initramfs 路径，然后编译内核
-cd ../../
-sed "s|CONFIG_INITRAMFS_SOURCE=.*|CONFIG_INITRAMFS_SOURCE=\"$(pwd)/output/neo_initramfs.cpio.gz\"|" \
-    board/linux_defconfig > linux-6.6.83/arch/riscv/configs/neorv32_ax301_defconfig
-cd linux-6.6.83
+# 编译内核（$PATH 中需有 xPack riscv-none-elf-gcc 14.2.0）
+cd linux-6.18.60
 make ARCH=riscv CROSS_COMPILE=riscv-none-elf- neorv32_ax301_defconfig
+grep '^CONFIG_HZ=' .config        # 必须输出 CONFIG_HZ=100
 make ARCH=riscv CROSS_COMPILE=riscv-none-elf- -j$(nproc)
 cp arch/riscv/boot/Image ../output/
 ```
@@ -159,13 +159,13 @@ dtc -I dts -O dtb -o output/neorv32_ax301.dtb board/neorv32_ax301.dts
 python3 host/boot_linux.py --port /dev/ttyUSB0
 ```
 
-这是**默认路径**，只需要 FPGA + SDRAM + UART —— **不需要 SD 卡**。每次启动时，内核 / DTB / initramfs 都会通过 UART xmodem 流式传输到 SDRAM（~145 s 传输 + ~98 s 内核启动 ≈ 243 s 进入 shell）。
+这是**默认路径**，只需要 FPGA + SDRAM + UART —— **不需要 SD 卡**。每次启动时，内核 / DTB / initramfs 都会通过 UART xmodem 流式传输到 SDRAM（2026-10-30 实测：从 `boot_linux.py` 启动到 shell 提示符共 **约 224 s** —— 其中约 215 s 用于 FPGA 烧写、stage2 上传和 1.7 MB 的 xmodem 传输，约 9 s 为内核启动）。
 
 ## 从 SD 卡快速启动（可选）
 
 > **可选** —— 仅当你把 SD 卡接到 FPGA 的 SPI 引脚时使用。上面步骤 7 的 xmodem 路径不需要任何 SD 卡。
 
-UART xmodem 每次启动都要 ~145 s。为了跳过这一步，stage2 loader 可以通过 NEORV32 的硬件 SPI 外设直接从 SD 卡读取内核 blob。Linux 仍然运行在 SDRAM 中 —— **SD 卡只在启动时作为只读批量存储使用**，因此无需任何内核侧驱动。
+UART xmodem 传输每次启动都要约 3.5 分钟。为了跳过这一步，stage2 loader 可以通过 NEORV32 的硬件 SPI 外设直接从 SD 卡读取内核 blob。Linux 仍然运行在 SDRAM 中 —— **SD 卡只在启动时作为只读批量存储使用**，因此无需任何内核侧驱动。
 
 **接线**（AX301 板载 SD 槽）：`PIN_J15=SD_CLK`、`PIN_K16=SD_DI (MOSI)`、`PIN_J16=SD_DO (MISO)`、`PIN_K15=SD_NCS`。FPGA 位流需要在启用 `IO_SPI_EN=true` 的情况下重新编译（`rtl/ax301_top.vhd` 中已设好）。
 
@@ -184,7 +184,7 @@ python3 host/sd_pack.py --port /dev/ttyUSB0
 python3 host/boot_sd.py --port /dev/ttyUSB0
 ```
 
-大约 **~150 s** 到达 shell 提示符（xmodem 启动约 ~243 s，每次启动节省 ~90 s）。
+在旧的 6.6 内核上，大约 **~150 s** 到达 shell 提示符，当时比 xmodem 快约 90 s。尚未用 6.18 复测（测试板上没有 SD 卡）；内核自身的启动时间现在约 9 s。
 
 **内核与 initramfs 解耦：** 内核现在以 `CONFIG_INITRAMFS_SOURCE=""` 编译 —— initramfs **不再嵌入** Image。stage2 从 SD blob 中把 Image / DTB / initramfs 作为三段独立数据读入 SDRAM，然后在跳转前 patch DTB `chosen/linux,initrd-end` 的 sentinel (`0xC0DEDEAD`) 为真实的结束地址。内核再根据 DT `chosen` 里的地址解包 initramfs。
 
@@ -197,7 +197,7 @@ python3 host/boot_sd.py --port /dev/ttyUSB0
 | 槽位   | 起始 LBA | 预留        | 目前使用 |
 |--------|----------|-------------|----------|
 | header | 0        | 1 sec       | magic + 尺寸 + LBAs + `layout_version` |
-| Image  | 1        | 4000 sec (2 MB) | ~1.5 MB |
+| Image  | 1        | 4000 sec (2 MB) | ~1.7 MB |
 | DTB    | 4001     | 8 sec (4 KB)    | ~1.5 KB |
 | initrd | 4009     | 4000 sec (2 MB) | ~3 KB — 有大把空间留给应用 |
 
@@ -206,7 +206,7 @@ python3 host/boot_sd.py --port /dev/ttyUSB0
 ```bash
 # 一键 /init 改-测回圈（默认 230400 baud + persistent stage2）：
 vim sw/initramfs/init.c
-make -C sw/initramfs LINUX_DIR=../../linux-6.6.83
+make -C sw/initramfs LINUX_DIR=../../linux-6.18.60
 cp sw/initramfs/neo_initramfs.cpio.gz output/
 python3 host/boot_sd.py --update        # 更新 init 槽 + 启动，~17s 写入
 # 追加 --update-dtb / --update-kernel 更新其它槽；--update-verify
@@ -221,8 +221,8 @@ python3 host/sd_pack.py --port /dev/ttyUSB0     # ~99s @ 230400
 
 | 模式 | 主机脚本 | 到 shell 的时间 | 使用场景 |
 |------|----------|-----------------|----------|
-| xmodem | `boot_linux.py` | ~243 s | 没有 SD 卡，或调试 stage2 |
-| SD blob | `boot_sd.py` | ~150 s | 日常开发（一次性 `sd_pack.py` 之后） |
+| xmodem | `boot_linux.py` | 约 224 s（传输约 215 s + 启动 9 s） | 没有 SD 卡，或调试 stage2 |
+| SD blob | `boot_sd.py` | ~150 s（6.6 时期，未复测） | 日常开发（一次性 `sd_pack.py` 之后） |
 
 ### 主机 / stage2 优化（Phase 1–6）
 
@@ -255,7 +255,7 @@ Stage2 loader 命令（上传 stage2 之后通过 UART 发送）：`l`=xmodem、
   │  │  └───┬───┘  └──────┘  └──────┘  └─────────┘  │  │
   │  │      │                                        │  │
   │  │  ┌───┴───┐  ┌──────┐  ┌──────┐  ┌─────────┐  │  │
-  │  │  │Wishbone│  │ICACHE│  │DCACHE│  │  CLINT  │  │  │
+  │  │  │Wishbone│  │ICACHE│  │D$:off│  │  CLINT  │  │  │
   │  │  │  XBUS  │  │      │  │      │  │(timer)  │  │  │
   │  │  └───┬───┘  └──────┘  └──────┘  └─────────┘  │  │
   │  │      │                                        │  │
@@ -287,16 +287,16 @@ Stage2 loader 命令（上传 stage2 之后通过 UART 发送）：`l`=xmodem、
 
 ```
 上电 → NEORV32 内部 bootloader（19200 波特率，ROM 位于 0xFFE00000）
-  ↓ 上传 stage2_loader.bin（3.7 KB）
+  ↓ 上传 stage2_loader.bin（7.9 KB）
   ↓ 执行 → UART 切换到 115200 波特率
 Stage2 加载器（IMEM，115200 波特率）
   ↓ 'l' → Linux 直接启动模式
-  ↓ xmodem：内核 Image（1.5 MB） → SDRAM 0x40000000，CRC-32 校验
+  ↓ xmodem：内核 Image（1.7 MB） → SDRAM 0x40000000，CRC-32 校验
   ↓ xmodem：DTB（1.4 KB）         → SDRAM 0x41F00000，CRC-32 校验
   ↓ xmodem：initramfs（2.9 KB）   → SDRAM 0x41F80000，CRC-32 校验
   ↓ 跳转到 0x40000000，a0=hartid，a1=DTB 指针
 Linux 内核（M-mode，nommu）
-  ↓ 约 98 秒启动 → /init（initramfs 中的迷你 shell）
+  ↓ 约 9 秒启动 → /init（initramfs 中的迷你 shell）
 ```
 
 ### FPGA 内存映射
@@ -317,12 +317,12 @@ Linux 内核（M-mode，nommu）
 
 ```
 0x40000000 ┌─────────────────────────┐
-           │     Linux 内核           │  ~1.4 MB
+           │     Linux 内核           │  ~1.7 MB
            │  .text, .rodata, .data  │
            │  （由 stage2 加载）       │
-0x40170000 ├─────────────────────────┤  （大约）
-           │     内核 BSS             │  ~49 KB
-0x4017C000 ├─────────────────────────┤
+0x401A4000 ├─────────────────────────┤  （大约）
+           │     内核 BSS             │  ~51 KB
+0x401B1000 ├─────────────────────────┤
            │                         │
            │   空闲内存（伙伴系统）     │  ~30 MB
            │   由页分配器管理          │
@@ -332,7 +332,7 @@ Linux 内核（M-mode，nommu）
            │  （通过 a1 寄存器         │
            │   传递给内核）            │
 0x41F80000 ├─────────────────────────┤
-           │   initramfs (cpio.gz)   │  ~1.7 KB
+           │   initramfs (cpio.gz)   │  ~2.9 KB
            │  （内核解压到 rootfs      │
            │   tmpfs 中）             │
 0x42000000 └─────────────────────────┘  32 MB 结束
@@ -340,8 +340,8 @@ Linux 内核（M-mode，nommu）
 
 **关键运行时数据**（来自内核日志）：
 - 总内存：32,768 KB（32 MB）
-- 启动后可用：30,908 KB（约 30 MB 空闲）
-- 内核代码：1,076 KB | 读写数据：137 KB | 只读数据：160 KB | Init：99 KB | BSS：52 KB
+- 启动后可用：30,504 KB（约 30 MB 空闲）
+- 内核代码：1,240 KB | 读写数据：146 KB | 只读数据：178 KB | Init：99 KB | BSS：51 KB
 
 ## 为什么这很难？
 
@@ -351,60 +351,54 @@ NEORV32 是一个微控制器核心 —— 它从未被设计为运行 Linux。�
 
 Linux 通常在 S-mode（超级用户模式）下运行，并使用虚拟内存。NEORV32 只有 M-mode（机器模式）和 U-mode。我们使用 `nommu` 配置直接在 M-mode 下运行内核。
 
-**关键配置：** `CONFIG_MMU=n`，`CONFIG_PAGE_OFFSET=0x40000000`（必须与物理 RAM 基址匹配）。
+**关键配置：** `CONFIG_MMU=n`，`CONFIG_PHYS_RAM_BASE=0x40000000`（在 6.18 nommu 下，`PAGE_OFFSET` 会自动跟随物理 RAM 基址）。
 
-### 2. 调度器死锁
+### 2. 定时器 tick 对 HZ=250 来说太贵
 
-内核调度器的 `need_resched` 循环假设抢占在所有点都能工作。在我们的单核 nommu 环境中，这些会变成线程间的无限乒乓循环。
+在 6.6 上，我们先后遇到 `need_resched` 乒乓循环、RCU 宽限期永远完成不了、工作队列永远不执行，并且逐个打了补丁（单次 `__schedule()`、同步 SRCU、同步 `populate_rootfs()` ……）。在实机上给 6.18 的调度器和定时器中断插桩测量后，才看清它们背后的共同原因：
 
-**解决方案：** 修改 `schedule()` 和 `preempt_schedule_common()`，使 `__schedule()` 只执行一次，而不是循环检查 `need_resched`。为 kthread 启动添加了 `schedule_preempt_disabled_once()`。
+| | HZ=250（默认） | HZ=100 |
+|---|---|---|
+| tick 周期 | 200,000 周期 | 500,000 周期 |
+| 定时器中断处理函数平均耗时 | **约 170,000 周期（一个 tick 的 85%）** | 约 109,000 周期（22%） |
+| `__schedule()` 耗时（含开中断时处理的 tick） | 约 357,000 周期（1.8 个 tick） | 约 82,000 周期（0.16 个 tick） |
+| 超过一个 tick 的切换比例 | 98.7% | 1,024 次中 0 次 |
+| 单次 `schedule()` 调用中 `while (need_resched())` 的循环次数 | >4,096（init、`ksoftirqd/0`、`kworker/u4:0`）—— 活锁 | 从未达到 32（1,024 次切换中仅重复 38 次） |
+
+在 HZ=250 下，每次上下文切换期间挂起的那个 tick 都会再次置位 `need_resched`，于是 `schedule()` 在同几个任务之间不停切换，谁都干不了活：kworker 永远不执行，clocksource 切换后几秒内启动就卡死了。
+
+**解决方案：** `CONFIG_HZ_100` —— 无需任何调度器、RCU、kthread 或 init 补丁。
 
 ### 3. ~~`wfi` 导致 CPU 停机~~ （已解决）
 
 最初我们将 `wfi` 替换为 `nop`，但测试确认 `wfi` 工作正常 —— 定时器中断能正确唤醒 CPU。现已恢复上游的 `wfi` 指令。
 
-### 4. RISCV_ALTERNATIVE 补丁冲突
+### 4. ~~RISCV_ALTERNATIVE 补丁冲突~~ （已解决）
 
-内核的替代指令补丁框架（`RISCV_ALTERNATIVE`）会在运行时根据检测到的 ISA 扩展替换指令。在 `free_initmem()` 之后，`.alternative` 段的 __init 数据被释放，CPU 跳入已释放的内存执行代码（在 `epc=0x4011c002` 处触发非法指令陷阱）。
+在 6.6 上，我们因为 `free_initmem()` 之后出现非法指令陷阱而禁用了 `RISCV_ALTERNATIVE`。在 6.18 上，有了原生原子操作和 HZ=100，使用上游默认值（启用）也能正常运行；由于 DT 的 ISA 字符串是 `acim`，所有 alternative 都不会被打入。
 
-**解决方案：** 在 `arch/riscv/Kconfig` 中完全禁用 `RISCV_ALTERNATIVE`。
+### 5. ~~RCU / 工作队列停滞~~ （已解决）
 
-### 5. RCU / 工作队列停滞
-
-单线程 RCU（`srcutiny`）和异步工作队列假设抢占调度正常工作。在我们的单核 nommu 系统上，宽限期永远无法完成，`synchronize_srcu()` 会永久挂起。
-
-**解决方案：** `srcutiny.c` 中的同步宽限期，`initramfs.c` 中的同步 `populate_rootfs()`，`async_synchronize_full()` 的 120 秒超时。
+与第 2 点根因相同 —— 在 HZ=100 下，SRCU、异步 init 和工作队列无需修改即可正常运行。
 
 ### 6. UART 驱动
 
 NEORV32 的 UART 不被任何上游 Linux 驱动支持。我们编写了自定义的 `neorv32_uart.c` tty 驱动，使用基于 kthread 的轮询（无 IRQ）并直接进行行规程传递。
 
-## 内核补丁
+## 内核改动
 
-所有补丁位于 `kernel/neorv32_nommu.patch`（针对原版 6.6.83 修改了 16 个文件）。
+内核是**原版 Linux 6.18.60** —— 没有内核补丁文件。所有 NEORV32 相关内容都在 `board/` 里：
 
-**原子操作：** 内核使用**原生 RISC-V 原子指令**（AMO + LR/SC）。这得益于我们发现并修复了 [NEORV32 SC.W 指令的一个 bug](https://github.com/stnolting/neorv32/pull/1520) —— store-conditional 在成功时返回的是 LR.W 载入的旧值而非 0（成功）。修复方法是在 `neorv32_bus_amo_rvs` 中添加 `sc_pend` 信号来正确覆盖响应数据。所有 11 个用户空间 LR/SC 测试通过，内核中包含 810 条原子指令。
+| 文件 | 作用 |
+|------|------|
+| `board/neorv32_uart.c` | 自定义 UART tty 驱动（kthread 轮询、earlycon），拷入 `drivers/tty/serial/` |
+| `board/inject_driver.sh` | 拷入驱动并添加 Kconfig/Makefile 条目 |
+| `board/linux_defconfig` | nommu RV32 M-mode 配置：`CONFIG_HZ_100`、`PHYS_RAM_BASE=0x40000000`、外部 initramfs、无块设备/网络/模块 |
+| `board/neorv32_ax301.dts` | 设备树（`riscv,isa-extensions` = `i m a c` …、CLINT、UART，initrd 位置由 stage2 修补） |
 
-### 修改的文件
+**原子操作：** 内核使用**原生 RISC-V 原子指令**（AMO + LR/SC）。这得益于我们发现并修复了 [NEORV32 SC.W 指令的一个 bug](https://github.com/stnolting/neorv32/pull/1520) —— store-conditional 在成功时返回的是 LR.W 载入的旧值而非 0（成功）—— 以及后来 reservation station 里的一个 [请求稳定性 bug](https://github.com/stnolting/neorv32/pull/1661)。两者都已合入上游。全部 11 个用户空间 LR/SC/AMO 测试通过。
 
-| 文件 | 修改内容 |
-|------|---------|
-| `arch/riscv/Kconfig` | 禁用 `RISCV_ALTERNATIVE` |
-| `arch/riscv/kernel/traps.c` | M-mode 陷阱处理调整 |
-| `kernel/sched/core.c` | 单次 `__schedule()`，不循环检查 `need_resched` |
-| `kernel/sched/rt.c` | 实时调度器 nommu 调整 |
-| `kernel/kthread.c` | 使用 `schedule_preempt_disabled_once()`，kthreadd 优先级提升 |
-| `kernel/rcu/srcutiny.c` | 同步 SRCU 宽限期 |
-| `kernel/async.c` | `async_synchronize_full()` 120 秒超时 |
-| `include/linux/sched.h` | 声明 `schedule_preempt_disabled_once()` |
-| `include/linux/srcutiny.h` | SRCU 结构调整 |
-| `init/main.c` | init 的 SCHED_FIFO 提升，禁用 initmem 毒化 |
-| `init/initramfs.c` | 同步 `populate_rootfs()` |
-| `drivers/tty/serial/Kconfig` | 添加 NEORV32 UART 选项 |
-| `drivers/tty/serial/Makefile` | 构建 neorv32_uart.o |
-| `drivers/tty/serial/neorv32_uart.c` | **新文件** — 自定义 UART 驱动 |
-| `arch/riscv/configs/neorv32_defconfig` | **新文件** — 内核配置 |
-| `arch/riscv/configs/neorv32_ax301_defconfig` | **新文件** — AX301 板级配置 |
+针对 6.6.83 的原始 16 文件补丁（`kernel/neorv32_nommu.patch`）及其来龙去脉保存在 git 历史和 `BUILD_LOG.md` 中。
 
 ## FPGA RTL
 
@@ -417,12 +411,12 @@ NEORV32 在 `rtl/ax301_top.vhd` 中使用以下泛型参数配置：
 | `RISCV_ISA_U` | true | Linux 用户空间的 U-mode |
 | `RISCV_ISA_Zaamo` | true | 原子内存操作（AMO） |
 | `RISCV_ISA_Zalrsc` | true | Load-reserved / store-conditional（LR/SC） |
-| `ICACHE_EN` | true | SDRAM 指令取指所需 |
-| `DCACHE_EN` | true | 性能优化（SDRAM 数据访问） |
+| `ICACHE_EN` | true | SDRAM 指令取指所需（默认 4 块 × 64 B = 256 B） |
+| `DCACHE_EN` | **false** | 写回式 D-cache 配合非突发 SDRAM 控制器反而更慢，并会触发 `ktime` seqcount 活锁（见 `neorv32_patches/README.md`） |
 | `IMEM_SIZE` | 8 KB | Stage2 加载器可放入 8 KB |
 | `DMEM_SIZE` | 8 KB | 内核栈/堆临时空间 |
-| `IO_UART0_RX_FIFO` | 4 | 2^4 = 16 条目 FIFO 用于控制台输入 |
-| `IO_UART0_TX_FIFO` | 4 | 2^4 = 16 条目 FIFO 用于控制台输出 |
+| `IO_UART0_RX_FIFO` | 4 | 4 条目 FIFO 用于控制台输入（generic 是深度，不是 log2） |
+| `IO_UART0_TX_FIFO` | 4 | 4 条目 FIFO 用于控制台输出 |
 
 ## 项目结构
 
@@ -430,20 +424,18 @@ NEORV32 在 `rtl/ax301_top.vhd` 中使用以下泛型参数配置：
 see_neorv32_run_linux/
 ├── tools/openFPGALoader/  — openFPGALoader 源码（需从源码编译）
 ├── neorv32/               — NEORV32 RTL（git 子模块 → stnolting/neorv32 release tag，无本地补丁）
-├── linux-6.6.83.tar.xz   — Linux 内核源码压缩包（未纳入 git —— 从 kernel.org 下载）
+├── linux-6.18.60.tar.xz  — Linux 内核源码压缩包（未纳入 git —— 从 kernel.org 下载）
 ├── rtl/                   — 自定义 FPGA 设计
 │   ├── ax301_top.vhd      — 顶层模块：NEORV32 + SDRAM + UART + GPIO
 │   ├── wb_sdram_ctrl.v    — Wishbone → SDRAM 桥接
 │   └── sdram_ctrl.v       — SDRAM 控制器状态机（CL=3, 50 MHz）
 ├── quartus/               — Quartus 项目文件（.qsf, .qpf, .sdc）
-├── kernel/
-│   └── neorv32_nommu.patch — 16 个内核补丁（基于原版 6.6.83）
 ├── board/                 — 板级支持文件
 │   ├── neorv32_ax301.dts   — 设备树源码
-│   ├── linux_defconfig     — 内核配置
+│   ├── linux_defconfig     — 内核配置（Linux 6.18，CONFIG_HZ_100）
 │   ├── neorv32_uart.c      — 自定义 UART 驱动源码
 │   ├── inject_driver.sh    — 将驱动注入内核源码树的脚本
-│   └── buildroot_defconfig — Buildroot 配置（替代构建方式）
+│   └── buildroot_defconfig — 用于构建 /init 所需 Linux 工具链的 Buildroot 配置（其中的内核设置是遗留的 6.6.83，未使用）
 ├── sw/
 │   ├── stage2_loader/      — xmodem 启动加载器（C，从 IMEM 运行）
 │   │   ├── main.c
@@ -452,25 +444,34 @@ see_neorv32_run_linux/
 │       ├── init.c           — 自定义 shell（纯系统调用，无 libc）
 │       └── Makefile
 ├── host/                  — Python 主机脚本
-│   ├── boot_linux.py       — 完整启动流程（烧写 + 上传 + 控制台）
+│   ├── boot_linux.py       — 完整 xmodem 启动流程（烧写 + 上传 + 控制台）
+│   ├── boot_sd.py          — 从 SD blob 启动（可先 --update）
+│   ├── sd_pack.py / sd_update.py — 写入完整 SD blob / 只写有变化的槽位
+│   ├── sd_dump.py / sd_smoke.py / sd_write_test.py — SD 调试工具
+│   ├── sd_layout.py / sd_proto.py — 共享的 SD 槽位布局和 stage2 协议辅助
 │   └── test_shell.py       — Shell 命令测试
+├── neorv32_patches/       — 我们的 NEORV32 RTL 修复说明（均已合入上游）
+├── sim/                   — sdram_ctrl 的 iverilog 测试平台（`make` 运行）
+├── icesugar/              — NEORV32 裸机移植到 iCESugar（iCE40UP5K）
 ├── output/                — 构建输出（由构建步骤生成）
-└── BUILD_LOG.md           — 105 次构建的调试历程
+└── BUILD_LOG.md           — 6.6 移植时 105 次构建的调试历程
 ```
 
 ## 资源使用（EP4CE6，50 MHz）
 
 | 资源 | 已使用 | 可用 | 百分比 |
 |------|--------|------|--------|
-| 逻辑单元 | 4,600 | 6,272 | 73% |
-| 存储位 | 168,960 | 276,480 | 61% |
-| 寄存器 | 2,408 | 6,272 | 38% |
+| 逻辑单元 | 4,519 | 6,272 | 72% |
+| 存储位 | 166,912 | 276,480 | 60% |
+| 寄存器 | 2,163 | 6,272 | 34% |
 | 嵌入式乘法器 | 0 | 30 | 0% |
+
+（Quartus 以 EP4CE10 裸片、高强度布局进行适配；比特流在 AX301 的 EP4CE6 上运行。数据基于 NEORV32 v1.13.7。）
 
 ## 已知问题
 
-- **内核必须使用 xPack `riscv-none-elf-gcc` 14.2.0 编译：** 使用 Buildroot 的 `riscv32-buildroot-linux-gnu-gcc` 12.4.0 编译出的内核会在 `free_initmem()` 处死锁 —— 最后一个 debug marker `L`（system_state = RUNNING）能打印出来，但执行永远无法到达 `M`（free_initmem 之后）。即使源码、补丁、内核配置和 FPGA 比特流完全相同，仅编译器不同就会导致此问题。根本原因是 GCC 12.4.0 生成的机器码存在细微差异，在 NEORV32 的受限环境中触发死锁。用 Buildroot 编译器构建的内核整体运行也明显更慢（clocksource 切换在 13.8 秒 vs 7.4 秒，并触发 `sched: RT throttling activated`）。**内核必须使用 xPack 裸机工具链编译。**
-- **启动时间约 98 秒：** 主要消耗在驱动探测和异步工作队列超时上。50 MHz 单发射核心对内核初始化来说确实很慢。
+- **内核必须使用 xPack `riscv-none-elf-gcc` 14.2.0 编译：** 在旧的 6.6.83 内核上，使用 Buildroot 的 `riscv32-buildroot-linux-gnu-gcc` 12.4.0 编译出的内核会在 `free_initmem()` 处死锁（尚未在 6.18 上复测） —— 最后一个 debug marker `L`（system_state = RUNNING）能打印出来，但执行永远无法到达 `M`（free_initmem 之后）。即使源码、补丁、内核配置和 FPGA 比特流完全相同，仅编译器不同就会导致此问题。根本原因是 GCC 12.4.0 生成的机器码存在细微差异，在 NEORV32 的受限环境中触发死锁。用 Buildroot 编译器构建的内核整体运行也明显更慢（clocksource 切换在 13.8 秒 vs 7.4 秒，并触发 `sched: RT throttling activated`）。**内核必须使用 xPack 裸机工具链编译。**
+- **启动时间约 9 秒**（从内核开始执行到 shell，6.18 + HZ=100）；在此之前的 xmodem 传输约需 215 秒 —— 快速迭代请使用 SD 卡启动路径。
 - **SDRAM 偶发初始化失败：** 首次上电时偶尔会失败。将开发板断电几秒钟后重新上电即可解决。
 - **Shell 功能极简：** 仅支持 `uname`、`info`、`amo`、`help`、`exit`。init 二进制文件是自定义 C 程序，而非 busybox（为了保持 initramfs 尽可能小）。
 - **无网络、无存储：** 这是一个纯 UART 控制台。EP4CE6 没有多余空间容纳额外外设。
@@ -478,5 +479,5 @@ see_neorv32_run_linux/
 ## 许可证
 
 - NEORV32 RTL：BSD 3-Clause（参见 [NEORV32 仓库](https://github.com/stnolting/neorv32)）
-- Linux 内核补丁：GPL-2.0（与内核相同）
+- Linux UART 驱动和内核配置：GPL-2.0（与内核相同）
 - SDRAM 控制器、主机脚本、stage2 加载器：MIT

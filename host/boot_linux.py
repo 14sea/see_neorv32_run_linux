@@ -12,7 +12,7 @@ Sequence:
   7. Stage2 jumps to kernel with a0=0, a1=0x41F00000
 
 Memory layout:
-  0x40000000  Linux Image (~1.5 MB)
+  0x40000000  Linux Image (~1.7 MB)
   0x41F00000  DTB (~1.4 KB)
   0x41F80000  initramfs (~1.7 KB)
 """

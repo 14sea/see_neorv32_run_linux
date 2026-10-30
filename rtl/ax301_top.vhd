@@ -142,8 +142,8 @@ begin
     IO_GPIO_NUM      => 4,
     IO_CLINT_EN      => true,
     IO_UART0_EN      => true,
-    IO_UART0_RX_FIFO => 4,   -- 2^4 = 16-entry FIFO for Linux console
-    IO_UART0_TX_FIFO => 4,   -- 2^4 = 16-entry FIFO for Linux console
+    IO_UART0_RX_FIFO => 4,   -- 4-entry FIFO (depth, not log2) for Linux console
+    IO_UART0_TX_FIFO => 4,   -- 4-entry FIFO (depth, not log2) for Linux console
     -- Everything else off
     IO_SPI_EN        => true,
     IO_SDI_EN        => false,
