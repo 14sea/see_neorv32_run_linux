@@ -87,16 +87,13 @@ All source code is included in this repository, with one exception: the Linux ke
 | dtc (device tree compiler) | DTB compilation |
 | Python 3 + pyserial | Host boot script |
 
-### Step 1: Initialize NEORV32 submodule and apply local RTL patch
+### Step 1: Initialize NEORV32 submodule
 
 ```bash
 git submodule update --init --recursive
-cd neorv32
-git apply ../neorv32_patches/0006-rvs-stable-sc-request.patch
-cd ..
 ```
 
-> **Required:** This one-line reservation-station fix keeps a successful `SC.W` a write for the whole bus transfer. Upstream turns it into a read one cycle after the strobe, which our SDRAM controller samples, so atomic `cmpxchg` stores are silently dropped and the kernel hangs in `vfs_caches_init()`. See `neorv32_patches/README.md` for details.
+> No local RTL patches are needed: our last fix (a successful `SC.W` must stay a write for the whole bus transfer) is upstream since release v1.13.7 ([PR #1661](https://github.com/stnolting/neorv32/pull/1661)). Do not use NEORV32 v1.13.2–v1.13.6 with this SDRAM controller — atomic `cmpxchg` stores get silently dropped and the kernel hangs in `vfs_caches_init()`. See `neorv32_patches/README.md` for details.
 
 ### Step 2: Build openFPGALoader
 
@@ -432,7 +429,7 @@ The NEORV32 is configured with these generics in `rtl/ax301_top.vhd`:
 ```
 see_neorv32_run_linux/
 ├── tools/openFPGALoader/  — openFPGALoader source (build from source)
-├── neorv32/               — NEORV32 RTL (git submodule → stnolting/neorv32 release tag + local patch 0006)
+├── neorv32/               — NEORV32 RTL (git submodule → stnolting/neorv32 release tag, no local patches)
 ├── linux-6.6.83.tar.xz   — Linux kernel tarball (not tracked — download from kernel.org)
 ├── rtl/                   — Custom FPGA design
 │   ├── ax301_top.vhd      — top-level: NEORV32 + SDRAM + UART + GPIO

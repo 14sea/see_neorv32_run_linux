@@ -50,7 +50,7 @@ set_global_assignment -name VHDL_FILE ../neorv32/rtl/core/neorv32_neoled.vhd -li
 set_global_assignment -name VHDL_FILE ../neorv32/rtl/core/neorv32_gptmr.vhd -library neorv32
 set_global_assignment -name VHDL_FILE ../neorv32/rtl/core/neorv32_onewire.vhd -library neorv32
 set_global_assignment -name VHDL_FILE ../neorv32/rtl/core/neorv32_slink.vhd -library neorv32
-set_global_assignment -name VHDL_FILE ../neorv32/rtl/core/neorv32_tracer.vhd -library neorv32
+set_global_assignment -name VHDL_FILE ../neorv32/rtl/core/neorv32_tracebuf.vhd -library neorv32
 set_global_assignment -name VHDL_FILE ../neorv32/rtl/core/neorv32_sysinfo.vhd -library neorv32
 set_global_assignment -name VHDL_FILE ../neorv32/rtl/core/neorv32_debug_dtm.vhd -library neorv32
 set_global_assignment -name VHDL_FILE ../neorv32/rtl/core/neorv32_debug_auth.vhd -library neorv32

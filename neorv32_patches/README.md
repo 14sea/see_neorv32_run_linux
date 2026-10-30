@@ -6,7 +6,29 @@ because they have not yet been merged upstream.
 When/if these are accepted upstream, bump the `neorv32` submodule pointer
 and remove the corresponding patch file.
 
-## Status (2026-10-09)
+## Status (2026-10-30)
+
+**Submodule pin:** release tag `v1.13.7` (`b1f30724`; +86 commits past
+`v1.13.6`). **No active local patches**: `0006` was merged upstream as
+[#1661](https://github.com/stnolting/neorv32/pull/1661) (`15c0af6d`,
+changelog v1.13.6.6) and the patch file is deleted. Integration changes:
+
+- **RTL file renamed**: `neorv32_tracer.vhd` → `neorv32_tracebuf.vhd`
+  (v1.13.6.2, `TRACER` → `TRACEBUF`); one line in
+  `quartus/neorv32_demo.qsf`. `ax301_top.vhd` uses none of the renamed
+  generics, so it is unchanged.
+
+Quartus: 4,519 LE on EP4CE10, CLOCK setup −0.79 ns, S_CLK hold −0.97 ns
+(SDRAM I/O pins, usual range). stage2: 7,908 B.
+
+**HW-verified 2026-10-30** (unpatched `v1.13.7`, xmodem path): `nommu#`
+Uptime 18 s, `amo` 11/11 LR/SC/AMO, `test_shell` 3/3. SD path not
+re-run (no card in the slot).
+
+**Do not pin v1.13.2 – v1.13.6** with this SDRAM controller: they carry
+the #1556 SC-request bug described below.
+
+### Previous bump: v1.13.6 (2026-10-09)
 
 **Submodule pin:** release tag `v1.13.6` (`e25059f2`; +449 commits past
 the previous `99fb4165` pin). From this bump on we track **release
@@ -26,7 +48,7 @@ Quartus: 4,480 LE on EP4CE10, timing in the usual range (CLOCK setup
 −0.55 ns, S_CLK hold −0.97 ns — both on the SDRAM I/O pins; internal
 paths have > +6 ns slack). stage2: 7,908 B.
 
-**Active local patch (1):** `0006-rvs-stable-sc-request.patch` — a
+**Active local patch then (1):** `0006-rvs-stable-sc-request.patch` — a
 one-line fix that **keeps upstream's #1556 address-tracking reservation
 station** and only makes the SC bus request stable for the whole
 transfer.
@@ -79,14 +101,21 @@ cycle cannot reproduce it.
 | `v1.13.6` unpatched | hangs after `S`, no printk output (2/2 runs) | only `ABCD`, no banner |
 | `v1.13.6` + `0006` | `nommu#` 18 s, `amo` 11/11, `test_shell` 3/3 | banner at cycle 4,704,790 |
 | `v1.13.6` + `0005` | `nommu#` 18 s | banner at cycle 4,704,790 |
+| `v1.13.7` unpatched (contains #1661), 2026-10-30 | `nommu#` 18 s, `amo` 11/11, `test_shell` 3/3 | — |
 
 The repo bitstream built with `0006` is byte-identical (md5
 `554c7ad3…`) to the one verified on hardware above.
 
-**Upstream:** not reported yet — on hold pending further analysis.
+**Upstream:** fixed by [#1661](https://github.com/stnolting/neorv32/pull/1661)
+(opened 2026-10-09, merged 2026-10-12 as `15c0af6d`; changelog v1.13.6.6:
+"keep store-conditional bus request stable until the response (bug
+introduced with v1.13.1.1)"), first released in v1.13.7.
 
 **Recently dropped (now upstream):**
 
+- `0006-rvs-stable-sc-request.patch` — merged via
+  [#1661](https://github.com/stnolting/neorv32/pull/1661) (`15c0af6d`),
+  in release v1.13.7; dropped with the v1.13.7 bump (2026-10-30).
 - `0004-rvs-address-tracking.patch` — the *address-tracking* version is
   now upstream via `0d0bb3e6`
   ([#1556](https://github.com/stnolting/neorv32/pull/1556), 2026-05-16),
@@ -126,8 +155,9 @@ bursts.
 
 ## Apply
 
-After `git submodule update --init --recursive`, apply the one active
-local patch before building the bitstream:
+Nothing to apply as of `v1.13.7`: `git submodule update --init
+--recursive` gives a buildable tree. If a future local patch is needed,
+put it here and apply it with:
 
 ```bash
 cd neorv32
@@ -136,14 +166,13 @@ for p in ../neorv32_patches/*.patch; do
 done
 ```
 
-This applies `0006-rvs-stable-sc-request.patch` to
-`rtl/core/neorv32_bus.vhd`. Without it every successful `SC.W` is
-dropped by our SDRAM controller and the kernel hangs in
-`vfs_caches_init()` (see Status above).
-
 ## Inventory
 
-### `0006-rvs-stable-sc-request.patch` (ACTIVE — the kernel-boot fix)
+No active patches.
+
+## Inventory (historical)
+
+### `0006-rvs-stable-sc-request.patch` (merged upstream as #1661 — dropped 2026-10-30)
 
 **Targeted:** `rtl/core/neorv32_bus.vhd`, `neorv32_bus_amo_rvs::bus_request`.
 
@@ -163,8 +192,6 @@ turn-based SMP fairness are all kept unchanged.
 **Status:** HW-verified on `v1.13.6+0006` (2026-10-09): `nommu#` 18 s,
 `amo` 11/11 LR/SC/AMO, `test_shell` 3/3 (xmodem path; SD path not
 re-run, no card in the slot).
-
-## Inventory (historical)
 
 ### `0005-rvs-strict-clear-on-write.patch` (superseded by `0006`, 2026-10-09)
 
