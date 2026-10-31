@@ -540,6 +540,42 @@ static void mode_linux(void)
     __builtin_unreachable();
 }
 
+#ifdef FENCEI_TEST
+/* Mode 'f': fence.i vs D-cache write-back coherence test (needs DCACHE_EN,
+ * 4 KB direct-mapped D$ with 64 B blocks). Round k: dirty D$ blocks 0..62,
+ * write "li a0,k; ret" into a block that maps to the LAST index (63) so the
+ * D$ sync reaches it last, then fence.i (v=0) or fence+load+fence.i (v=1)
+ * and call it. A stale instruction fetch returns an older round's k. */
+#define FT_DIRTY 0x41000000UL
+#define FT_CODE  0x41100FC0UL
+static uint32_t __attribute__((noinline)) fencei_round(uint32_t k, int safe)
+{
+    volatile uint32_t *d = (volatile uint32_t *)FT_DIRTY;
+    volatile uint32_t *c = (volatile uint32_t *)FT_CODE;
+    for (int i = 0; i < 63; i++) d[i * 16] = k;
+    c[0] = 0x00000513u | ((k & 0x7ffu) << 20);   /* addi a0, x0, k */
+    c[1] = 0x00008067u;                          /* ret */
+    if (safe)
+        __asm__ volatile ("fence rw, rw\n\tlw zero, 0(%0)" :: "r"(c) : "memory");
+    __asm__ volatile ("fence.i" ::: "memory");
+    return ((uint32_t (*)(void))FT_CODE)();
+}
+
+static void mode_fencei_test(void)
+{
+    uint32_t bad[2] = {0, 0};
+    fencei_round(0, 1);                          /* prime SDRAM with valid code */
+    for (uint32_t k = 1; k <= 32; k++)
+        for (int v = 0; v < 2; v++)
+            if (fencei_round(k * 2 + v, v) != k * 2 + v) bad[v]++;
+    uart_puts("[fencei] stale of 32: fence.i=");
+    uart_puthex32(bad[0]);
+    uart_puts(" fence+lw+fence.i=");
+    uart_puthex32(bad[1]);
+    uart_puts("\r\n");
+}
+#endif
+
 int main(void)
 {
     neorv32_uart0_setup(UART_BAUD, 0);
@@ -578,6 +614,10 @@ int main(void)
             sd_read_header();
         } else if (mode == 'B') {
             mode_set_baud();
+#ifdef FENCEI_TEST
+        } else if (mode == 'f') {
+            mode_fencei_test();
+#endif
         } else {
             mode_uboot();              /* loads U-Boot, no return */
         }

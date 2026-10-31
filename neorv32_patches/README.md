@@ -39,9 +39,34 @@ in 6 s instead of 9 s.
 4 KB and a 4 KB D-cache (29/30 M9K), the `ktime` seqcount livelock
 described below no longer occurs, but boot is slower (7 s vs 6 s) and
 1 of 3 boots hung in stage2's SDRAM exec test right after `fence.i`.
-Suspected cause: `fence.i` restarts instruction fetch without waiting
-for the D-cache write-back sweep to finish. Under analysis; D-cache
-stays off.
+
+**That hang is an upstream bug (confirmed 2026-10-30, v1.13.7 = main
+`7d483648`):** on `fence.i`, `neorv32_cpu_control` restarts instruction
+fetch immediately, while `neorv32_core_complex` only *starts* the D-cache
+sync (`dcache_sync <= cpu_d_fence or cpu_i_fence`, from #1540). The
+read-only I-cache clears in one cycle; the D-cache then walks all blocks
+writing dirty ones back. The bus switch arbitrates per locked line
+transfer, and between D-cache blocks there are idle cycles, so the
+I-cache refill slips in and reads main memory *before* the D-cache has
+written the new code back. This violates Zifencei. The same happens with
+`ICACHE_EN => false` (the CPU fetch goes straight to the switch).
+
+| Test | unpatched | with fix |
+|---|---|---|
+| AX301, stage2 mode `f` (`host/fencei_test.py`; 32 rounds, store → `fence.i` → execute) | **32/32 stale** (every run) | 0/32 |
+| same, `fence rw,rw` + load + `fence.i` | 0/32 | 0/32 |
+| stock upstream GHDL `neorv32_tb` (D$ 32 × 32 B, bursts), code in DMEM | **16/16 stale** | 0/16 |
+| same, `ICACHE_EN=false` | **16/16 stale** | 0/16 |
+| Linux boots with D-cache on | 1 of 3 hung | 3/3 |
+| upstream `processor_check` (sim) | — | 62/62 |
+
+Fix (verified, kept locally, not upstreamed): `neorv32_cache` gets a
+`hold_i` input (do not accept new host requests in `S_IDLE`; pending
+requests stay latched, in-flight refills finish, so no deadlock) and a
+`busy_o` output (sync pending or in progress); `neorv32_core_complex`
+holds the I-cache — or, without an I-cache, delays the unlocked CPU
+fetch strobe — only while a `fence.i`-triggered D-cache sync is running.
++14 LE. D-cache stays off here anyway (7 s vs 6 s boot).
 
 **Do not pin v1.13.2 – v1.13.6** with this SDRAM controller: they carry
 the #1556 SC-request bug described below.

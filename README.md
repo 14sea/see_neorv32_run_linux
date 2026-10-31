@@ -415,7 +415,7 @@ The NEORV32 is configured with these generics in `rtl/ax301_top.vhd`:
 | `RISCV_ISA_Zalrsc` | true | Load-reserved / store-conditional (LR/SC) |
 | `ICACHE_EN` | true | Required for SDRAM instruction fetch |
 | `ICACHE_NUM_BLOCKS` | 64 | 64 × 64 B = **4 KB** I-cache (default 4 = 256 B): halves the timer-tick cost, boot 9 s → 6 s |
-| `DCACHE_EN` | **false** | Write-back D-cache against the non-burst SDRAM controller is a net loss. Re-tested 2026-10-30 with the 4 KB I-cache (DMEM cut to 4 KB to free M9Ks): the old `ktime` seqcount livelock is gone, but boot is slower (7 s vs 6 s) and one of three boots hung right after a `fence.i` — kept off (see `neorv32_patches/README.md`) |
+| `DCACHE_EN` | **false** | Write-back D-cache against the non-burst SDRAM controller is a net loss. Re-tested 2026-10-30 with the 4 KB I-cache (DMEM cut to 4 KB to free M9Ks): the old `ktime` seqcount livelock is gone, but boot is slower (7 s vs 6 s) and `fence.i` turned out to be broken with the D-cache on (an upstream NEORV32 bug: instruction fetch can read memory before the D-cache has written new code back) — kept off (see `neorv32_patches/README.md`) |
 | `IMEM_SIZE` | 8 KB | Stage2 loader fits in 8 KB |
 | `DMEM_SIZE` | 8 KB | Kernel stack/heap scratch space |
 | `IO_UART0_RX_FIFO` | 4 | 4-entry FIFO for console input (generic is the depth, not log2) |
@@ -452,6 +452,7 @@ see_neorv32_run_linux/
 │   ├── sd_pack.py / sd_update.py — write full SD blob / only changed slots
 │   ├── sd_dump.py / sd_smoke.py / sd_write_test.py — SD debug tools
 │   ├── sd_layout.py / sd_proto.py — shared SD slot layout + stage2 protocol helpers
+│   ├── fencei_test.py      — fence.i vs D-cache coherence test (stage2 built with -DFENCEI_TEST)
 │   └── test_shell.py       — shell command tester
 ├── neorv32_patches/       — notes on our (now upstream) NEORV32 RTL fixes
 ├── sim/                   — iverilog testbench for sdram_ctrl (`make` to run)

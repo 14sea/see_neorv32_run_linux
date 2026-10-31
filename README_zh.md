@@ -415,7 +415,7 @@ NEORV32 在 `rtl/ax301_top.vhd` 中使用以下泛型参数配置：
 | `RISCV_ISA_Zalrsc` | true | Load-reserved / store-conditional（LR/SC） |
 | `ICACHE_EN` | true | SDRAM 指令取指所需 |
 | `ICACHE_NUM_BLOCKS` | 64 | 64 × 64 B = **4 KB** I-cache（默认 4 块 = 256 B）：tick 开销减半，启动 9 秒 → 6 秒 |
-| `DCACHE_EN` | **false** | 写回式 D-cache 配合非突发 SDRAM 控制器得不偿失。2026-10-30 在 4 KB I-cache 基础上复测（把 DMEM 减到 4 KB 以腾出 M9K）：旧的 `ktime` seqcount 活锁已不再出现，但启动更慢（7 秒 vs 6 秒），且三次启动中有一次在 `fence.i` 之后卡死 —— 保持关闭（见 `neorv32_patches/README.md`） |
+| `DCACHE_EN` | **false** | 写回式 D-cache 配合非突发 SDRAM 控制器得不偿失。2026-10-30 在 4 KB I-cache 基础上复测（把 DMEM 减到 4 KB 以腾出 M9K）：旧的 `ktime` seqcount 活锁已不再出现，但启动更慢（7 秒 vs 6 秒），并且查明打开 D-cache 时 `fence.i` 有问题（NEORV32 上游 bug：取指可能在 D-cache 把新代码写回之前就读取了内存）—— 保持关闭（见 `neorv32_patches/README.md`） |
 | `IMEM_SIZE` | 8 KB | Stage2 加载器可放入 8 KB |
 | `DMEM_SIZE` | 8 KB | 内核栈/堆临时空间 |
 | `IO_UART0_RX_FIFO` | 4 | 4 条目 FIFO 用于控制台输入（generic 是深度，不是 log2） |
@@ -452,6 +452,7 @@ see_neorv32_run_linux/
 │   ├── sd_pack.py / sd_update.py — 写入完整 SD blob / 只写有变化的槽位
 │   ├── sd_dump.py / sd_smoke.py / sd_write_test.py — SD 调试工具
 │   ├── sd_layout.py / sd_proto.py — 共享的 SD 槽位布局和 stage2 协议辅助
+│   ├── fencei_test.py      — fence.i 与 D-cache 一致性测试（需用 -DFENCEI_TEST 构建的 stage2）
 │   └── test_shell.py       — Shell 命令测试
 ├── neorv32_patches/       — 我们的 NEORV32 RTL 修复说明（均已合入上游）
 ├── sim/                   — sdram_ctrl 的 iverilog 测试平台（`make` 运行）
